@@ -5,6 +5,7 @@ import time
 
 from core.registry import get_provider
 from core.model_logs import failure_code
+from core.call_trace import CallTrace
 from providers.base import ProviderError, response_has_output, usage_tokens
 
 
@@ -78,19 +79,24 @@ class RecoveryWorker:
         tokens = 0
         start = time.time()
         code, status = "empty_response", None
+        trace = CallTrace({"model": model, "messages": [{"role": "user", "content": "Reply exactly OK."}], "max_tokens": 256})
         try:
             # 探测独立超时与重试设置，不修改前台复用的 provider 实例。
             provider = copy.copy(get_provider(provider_name))
             provider.max_retries = 0
             provider.connect_timeout = 5
-            result = provider.chat(model, [{"role": "user", "content": "Reply exactly OK."}],
-                                   params={"max_tokens": 256}, timeout=20)
+            with trace.bind():
+                result = provider.chat(model, [{"role": "user", "content": "Reply exactly OK."}],
+                                       params={"max_tokens": 256}, timeout=20)
+            trace.data["result"] = result
             tokens = usage_tokens(result)
             success = response_has_output(result)
         except ProviderError as error:
+            trace.data["error"] = {"type": type(error).__name__, "message": str(error)}
             tokens = error.tokens
             code, status = failure_code(error), error.status
-        except Exception:
+        except Exception as error:
+            trace.data["error"] = {"type": type(error).__name__, "message": str(error)}
             code = "upstream_error"
         finally:
             if tokens:
@@ -108,7 +114,7 @@ class RecoveryWorker:
                     try:
                         log.write(target, source="recovery", outcome="success" if success else "failed",
                                   duration=time.time() - start, code=None if success else code, status=status,
-                                  stream=False, input_messages=1, input_chars=17, max_tokens=256, tool_count=0)
+                                  details=trace.snapshot(), stream=False, input_messages=1, input_chars=17, max_tokens=256, tool_count=0)
                     except Exception:
                         pass
                 self._log({"event": "model_recovered" if success else "recovery_failed",

@@ -18,6 +18,7 @@ from core.paths import CONFIG_FILE, COOLDOWN_FILE
 from core.registry import configure_providers, get_provider
 from core.state import StateManager
 from core.model_logs import ModelCallLog, failure_code
+from core.call_trace import CallTrace
 from core.quota import QuotaManager
 from core.capability import CapabilityManager
 from providers.base import ProviderError, response_has_output, usage_tokens
@@ -256,10 +257,11 @@ class AIRouter:
 
     # ---------- 调用 ----------
 
-    def _log_context(self, mode, messages, params, streaming):
+    def _log_context(self, mode, messages, params, streaming, task_type=None, request_body=None):
         params = params or {}
         return {"source": "business", "request_id": uuid.uuid4().hex,
-                "mode": mode, "stream": streaming, "input_messages": len(messages),
+                "request": request_body if request_body is not None else dict(params, model=mode, task_type=task_type, messages=messages, stream=streaming),
+                "mode": task_type or mode, "stream": streaming, "input_messages": len(messages),
                 "input_chars": sum(len(m.get("content", "")) for m in messages
                                    if isinstance(m, dict) and isinstance(m.get("content"), str)),
                 "tool_count": len(params.get("tools", [])) if isinstance(params.get("tools", []), list) else 0,
@@ -276,6 +278,13 @@ class AIRouter:
             fields.update(outcome=outcome, duration=time.time() - start,
                           code=code or (failure_code(error) if error else None),
                           status=getattr(error, "status", None))
+            trace = fields.pop("_trace", None)
+            if trace is not None:
+                if error is not None:
+                    trace.data["error"] = {"type": type(error).__name__, "message": str(error)}
+                fields["details"] = trace.snapshot()
+            else:
+                fields["details"] = {"request": fields.get("request"), "attempts": []}
             log.write(target, **fields)
         except Exception:
             # 日志不可写不应改变请求结果、统计或降级链。
@@ -285,6 +294,9 @@ class AIRouter:
         """在单个模型上执行 call，返回 (结果, 错误项)。"""
 
         provider_name, model = self.parse_target(target)
+        context = dict(context or {})
+        trace = CallTrace(context.get("request"))
+        context["_trace"] = trace
         start = time.time()
 
         if self.state.is_disabled(target):
@@ -301,7 +313,9 @@ class AIRouter:
 
         try:
             provider = get_provider(provider_name)
-            result = call(provider, model)
+            with trace.bind():
+                result = call(provider, model)
+            trace.data["result"] = result
             tokens = usage_tokens(result)
             if tokens:
                 self.quota.record_tokens_only(provider_name, tokens)
@@ -346,11 +360,11 @@ class AIRouter:
                 "error": "%s: %s" % (type(e).__name__, str(e)[:200]),
             }
 
-    def chat(self, mode, messages, task_type=None, params=None):
+    def chat(self, mode, messages, task_type=None, params=None, request_body=None):
         routes = self.rank_routes(self.get_routes(mode, task_type), task_type or mode)
         errors = []
 
-        context = self._log_context(task_type or mode, messages, params, False)
+        context = self._log_context(mode, messages, params, False, task_type, request_body)
         for index, target in enumerate(routes):
             context["next_target"] = routes[index + 1] if index + 1 < len(routes) else None
             result, error = self._attempt(
@@ -368,7 +382,7 @@ class AIRouter:
 
         return {"success": False, "errors": errors}
 
-    def stream(self, mode, messages, task_type=None, params=None):
+    def stream(self, mode, messages, task_type=None, params=None, request_body=None):
         """实质内容到达前允许降级；完整消费成功后才记成功。
 
         元信息 success 表示已选中可输出的流，最终统计由返回的生成器完成。
@@ -377,11 +391,13 @@ class AIRouter:
         routes = self.rank_routes(self.get_routes(mode, task_type), task_type or mode)
         errors = []
 
-        context = self._log_context(task_type or mode, messages, params, True)
+        context = self._log_context(mode, messages, params, True, task_type, request_body)
         for index, target in enumerate(routes):
             context["next_target"] = routes[index + 1] if index + 1 < len(routes) else None
             start = time.time()
             provider_name, model = self.parse_target(target)
+            trace = CallTrace(context.get("request"))
+            context = dict(context, _trace=trace)
             if self.state.is_disabled(target):
                 self._log_attempt(target, context, "skipped", start, code="disabled_pending_recovery")
                 errors.append({"model": target, "reason": "disabled_pending_recovery"})
@@ -399,8 +415,10 @@ class AIRouter:
             tokens = 0
             try:
                 provider = get_provider(provider_name)
-                iterator = iter(provider.stream(model, messages, params=params))
+                iterator = trace.wrap(iter(provider.stream(model, messages, params=params)))
                 for chunk in iterator:
+                    if not trace.data["attempts"]:
+                        trace.data.setdefault("_fallback_stream", []).append("data: " + chunk + "\n")
                     if chunk == "[DONE]":
                         break
                     parsed = self._parse_stream_chunk(chunk)
@@ -447,6 +465,8 @@ class AIRouter:
                     yield None
                     yield from buffered
                     for chunk in iterator:
+                        if not trace.data["attempts"]:
+                            trace.data.setdefault("_fallback_stream", []).append("data: " + chunk + "\n")
                         if chunk == "[DONE]":
                             break
                         parsed = self._parse_stream_chunk(chunk)

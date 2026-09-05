@@ -13,6 +13,7 @@ import time
 
 import requests
 from requests.adapters import HTTPAdapter
+from core.call_trace import begin_attempt, capture_response, current_trace
 
 
 class ProviderError(Exception):
@@ -235,6 +236,7 @@ class BaseProvider:
         response = None
 
         for attempt in range(self.max_retries + 1):
+            trace_attempt = begin_attempt(self.endpoint(), payload, self.headers(), self.api_key)
             try:
                 response = self.session.post(
                     self.endpoint(),
@@ -244,6 +246,7 @@ class BaseProvider:
                     stream=stream,
                 )
 
+                capture_response(trace_attempt, response, streaming=stream and response.status_code < 400)
                 self._raise_for_response(response)
                 return response
 
@@ -265,6 +268,8 @@ class BaseProvider:
                 self.sleep_before_retry(attempt, retry_after)
 
             except requests.exceptions.RequestException as e:
+                if trace_attempt is not None:
+                    trace_attempt["error"] = {"type": type(e).__name__, "message": str(e)}
                 last_error = ProviderError(
                     "%s 网络错误: %s" % (self.name, self._redact(str(e))[:200]),
                     retryable=True,
@@ -311,6 +316,8 @@ class BaseProvider:
 
         payload = self.build_payload(model, messages, params, stream=True)
         response = self._request(payload, stream=True, timeout=timeout)
+        trace = current_trace()
+        trace_response = trace.data["attempts"][-1].get("response") if trace and trace.data["attempts"] else None
         finished_choices = set()
         expected_choices = payload.get("n", 1)
         if not isinstance(expected_choices, int) or expected_choices < 1:
@@ -318,6 +325,10 @@ class BaseProvider:
 
         try:
             for raw_line in response.iter_lines(decode_unicode=True):
+                if isinstance(raw_line, bytes):
+                    raw_line = raw_line.decode(response.encoding or "utf-8", errors="replace")
+                if trace_response is not None:
+                    trace_response["lines"].append(raw_line + "\n")
                 if not raw_line:
                     continue
 
@@ -355,6 +366,8 @@ class BaseProvider:
             if len(finished_choices) < expected_choices:
                 raise ProviderError("%s: 流式响应在结束标记前中断" % self.name, retryable=True, code="stream_incomplete")
         except requests.exceptions.RequestException as error:
+            if trace_response is not None:
+                trace_response["error"] = {"type": type(error).__name__, "message": str(error)}
             raise ProviderError(
                 "%s 流式网络错误: %s" % (self.name, self._redact(str(error))[:200]),
                 retryable=True,

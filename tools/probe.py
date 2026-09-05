@@ -16,6 +16,7 @@ import requests
 from core.registry import PROVIDERS, env_file_for, provider_definition
 from decimal import Decimal, InvalidOperation
 from providers.base import response_has_output
+from core.call_trace import CallTrace, begin_attempt, capture_response
 
 # 非对话模型一律跳过：语音、向量、审核、图像、视频、实时等
 NON_CHAT = re.compile(
@@ -249,7 +250,17 @@ def model_catalog(name, key=None, timeout=LIST_TIMEOUT):
             result[model] = {"id": model, "free": True, "basis": "用户明确登记；目录未列出", "listed": False}
     return sorted(result.values(), key=lambda item: item["id"])
 
-def test_model(name, model, key=None, timeout=TEST_TIMEOUT, max_tokens=256):
+def test_model(name, model, key=None, timeout=TEST_TIMEOUT, max_tokens=256, capture=False):
+    if not capture:
+        return _test_model(name, model, key, timeout, max_tokens)
+    trace = CallTrace({"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": max_tokens})
+    with trace.bind():
+        result = _test_model(name, model, key, timeout, max_tokens)
+    result["_details"] = trace.snapshot()
+    return result
+
+
+def _test_model(name, model, key=None, timeout=TEST_TIMEOUT, max_tokens=256):
     """对单个模型发一次最小请求。2xx 还要带有效文本或工具调用才算可用。"""
 
     cls = provider_class(name)
@@ -269,6 +280,7 @@ def test_model(name, model, key=None, timeout=TEST_TIMEOUT, max_tokens=256):
 
     start = time.time()
 
+    trace_attempt = begin_attempt(_url(cls, "/chat/completions"), payload, _headers(key), key)
     try:
         response = requests.post(
             _url(cls, "/chat/completions"),
@@ -276,17 +288,22 @@ def test_model(name, model, key=None, timeout=TEST_TIMEOUT, max_tokens=256):
             headers=_headers(key),
             timeout=(min(CONNECT_TIMEOUT, timeout), timeout),
         )
-    except requests.exceptions.Timeout:
+    except requests.exceptions.Timeout as e:
+        if trace_attempt is not None:
+            trace_attempt["error"] = {"type": type(e).__name__, "message": str(e)}
         result["latency"] = round(time.time() - start, 2)
         result["reason"] = "超时"
         result["error"] = "%d 秒内没有响应" % timeout
         return result
     except requests.exceptions.RequestException as e:
+        if trace_attempt is not None:
+            trace_attempt["error"] = {"type": type(e).__name__, "message": str(e)}
         result["latency"] = round(time.time() - start, 2)
         result["reason"] = "网络错误"
         result["error"] = scrub(str(e), key)[:200]
         return result
 
+    capture_response(trace_attempt, response)
     result["latency"] = round(time.time() - start, 2)
     result["status"] = response.status_code
 
@@ -392,7 +409,7 @@ def _remaining_timeout(deadline, cap):
     return max(1.0, min(cap, deadline - time.monotonic()))
 
 
-def test_targets(targets, workers=5, budget=BUDGET, per_model_timeout=TEST_TIMEOUT):
+def test_targets(targets, workers=5, budget=BUDGET, per_model_timeout=TEST_TIMEOUT, capture=False):
     """按 provider 分组：组内串行避免撞 RPM，组间并行。结果按输入顺序返回。
 
     总耗时受 budget 约束：预算用完后剩下的模型标记为"超出时间预算"而不是一直等。
@@ -427,7 +444,7 @@ def test_targets(targets, workers=5, budget=BUDGET, per_model_timeout=TEST_TIMEO
                 continue
 
             results.append(
-                test_model(name, model, timeout=_remaining_timeout(deadline, per_model_timeout))
+                test_model(name, model, timeout=_remaining_timeout(deadline, per_model_timeout), **({"capture": True} if capture else {}))
             )
 
         return results
@@ -441,7 +458,7 @@ def test_targets(targets, workers=5, budget=BUDGET, per_model_timeout=TEST_TIMEO
     return [by_target[t] for t in targets]
 
 
-def scan_free(providers=None, workers=5, budget=BUDGET, per_model_timeout=SCAN_TIMEOUT, targets=None):
+def scan_free(providers=None, workers=5, budget=BUDGET, per_model_timeout=SCAN_TIMEOUT, targets=None, on_result=None):
     """扫描各 provider：先拉列表，再逐个实测。预算用完后剩下的模型进 skipped。"""
 
     deadline = time.monotonic() + budget
@@ -469,7 +486,9 @@ def scan_free(providers=None, workers=5, budget=BUDGET, per_model_timeout=SCAN_T
                 entry["truncated"] = True
                 continue
 
-            r = test_model(name, model, timeout=_remaining_timeout(deadline, per_model_timeout))
+            r = test_model(name, model, timeout=_remaining_timeout(deadline, per_model_timeout), **({"capture": True} if on_result else {}))
+            if on_result:
+                on_result(r)
 
             if r["ok"]:
                 entry["available"].append({"model": model, "latency": r["latency"]})

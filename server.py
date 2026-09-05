@@ -242,13 +242,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
         }
 
         if body.get("stream"):
-            self._handle_stream(api_key, mode, messages, task_type, params)
+            self._handle_stream(api_key, mode, messages, task_type, params, request_body=body)
         else:
-            self._handle_chat(api_key, mode, messages, task_type, params)
+            self._handle_chat(api_key, mode, messages, task_type, params, request_body=body)
 
-    def _handle_chat(self, api_key, mode, messages, task_type, params):
+    def _handle_chat(self, api_key, mode, messages, task_type, params, request_body=None):
         result = router.chat(
-            mode=mode, messages=messages, task_type=task_type, params=params
+            mode=mode, messages=messages, task_type=task_type, params=params, request_body=request_body
         )
 
         key_manager.record(api_key)
@@ -291,9 +291,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
         self._json(payload)
 
-    def _handle_stream(self, api_key, mode, messages, task_type, params):
+    def _handle_stream(self, api_key, mode, messages, task_type, params, request_body=None):
         meta, chunks = router.stream(
-            mode=mode, messages=messages, task_type=task_type, params=params
+            mode=mode, messages=messages, task_type=task_type, params=params, request_body=request_body
         )
 
         key_manager.record(api_key)

@@ -918,6 +918,52 @@ def cmd_models_logs(params):
         raise ManageError("暂时无法读取模型日志，请稍后重试", "logs_unavailable")
 
 
+def cmd_models_export(params):
+    from core.model_logs import ModelCallLog, MAX_RECORDS, MAX_DETAIL_BYTES
+    allowed = {"target", "provider", "start_at", "end_at", "source", "outcome", "id"}
+    if set(params) - allowed:
+        raise ManageError("日志导出参数无效", "invalid_input")
+    filters = dict(params)
+    if "id" in filters:
+        filters["ident"] = filters.pop("id")
+    apply_env_config()
+    rows = iter(ModelCallLog().export_rows(**filters))
+    first = next(rows, None)  # Validate before writing the header.
+    def line(value):
+        sys.stdout.write(json.dumps(value, ensure_ascii=False) + "\n")
+    from core.call_trace import redact, known_secrets
+    line({"type": "manifest", "format": "gateway-model-logs-v1", "exported_at": now_iso(),
+          "filters": redact(params, known_secrets()), "max_records": MAX_RECORDS, "max_compressed_detail_bytes": MAX_DETAIL_BYTES,
+          "note": "完整内容仅来自升级后实际记录的数据；旧日志仅摘要。密钥已隐藏。"})
+    count = 0
+    if first is not None:
+        line(dict(first, type="call")); count += 1
+    for row in rows:
+        line(dict(row, type="call")); count += 1
+    line({"type": "complete", "format": "gateway-model-logs-v1", "count": count})
+    sys.stdout.flush()
+
+
+def _record_probe_results(results):
+    from core.model_logs import ModelCallLog
+    log = ModelCallLog()
+    reason_codes = {"未配置密钥": "missing_key", "超时": "timeout", "网络错误": "network_error",
+                    "空响应": "empty_response", "接口不兼容": "invalid_response",
+                    "超出时间预算": "budget_exceeded", "配置错误": "config_error"}
+    for result in results:
+        try:
+            code = None if result["ok"] else reason_codes.get(result.get("reason"),
+                         "http_error" if result.get("status") else "test_failed")
+            skipped = code in ("budget_exceeded", "config_error", "missing_key")
+            outcome = "success" if result["ok"] else "skipped" if skipped else "failed"
+            summary = {} if skipped else {"input_messages": 1, "input_chars": 2, "max_tokens": 256, "tool_count": 0}
+            details = result.pop("_details", None)
+            log.write(result["target"], source="manual_test", outcome=outcome, details=details,
+                      duration=result.get("latency"), status=result.get("status"), code=code, stream=False, **summary)
+        except Exception:
+            pass
+
+
 def cmd_models_test(params):
     from core.paths import TEST_FILE
     from core.storage import atomic_write_json, read_json
@@ -937,23 +983,8 @@ def cmd_models_test(params):
     if not targets:
         raise ManageError("配置里没有任何模型", "invalid_config")
 
-    results = probe.test_targets(targets)
-    from core.model_logs import ModelCallLog
-    log = ModelCallLog()
-    reason_codes = {"未配置密钥": "missing_key", "超时": "timeout", "网络错误": "network_error",
-                    "空响应": "empty_response", "接口不兼容": "invalid_response",
-                    "超出时间预算": "budget_exceeded", "配置错误": "config_error"}
-    for result in results:
-        try:
-            code = None if result["ok"] else reason_codes.get(result.get("reason"),
-                         "http_error" if result.get("status") else "test_failed")
-            skipped = code in ("budget_exceeded", "config_error", "missing_key")
-            outcome = "success" if result["ok"] else "skipped" if skipped else "failed"
-            summary = {} if skipped else {"input_messages": 1, "input_chars": 2, "max_tokens": 256, "tool_count": 0}
-            log.write(result["target"], source="manual_test", outcome=outcome,
-                      duration=result.get("latency"), status=result.get("status"), code=code, stream=False, **summary)
-        except Exception:
-            pass
+    results = probe.test_targets(targets, capture=True)
+    _record_probe_results(results)
     payload = {
         "results": results,
         "summary": {"total": len(results), "ok": sum(1 for r in results if r["ok"])},
@@ -999,7 +1030,7 @@ def cmd_models_scan(params):
         if not isinstance(targets, list) or not targets or any(not isinstance(t, str) or validate_target(t, PROVIDERS) for t in targets):
             raise ManageError("targets 必须是非空有效模型数组", "invalid_input")
         providers = list(dict.fromkeys(t.split(":", 1)[0] for t in targets))
-    result = probe.scan_free(providers, targets=targets)
+    result = probe.scan_free(providers, targets=targets, on_result=lambda result: _record_probe_results([result]))
     payload = {
         "scanned_at": now_iso(),
         "budget_seconds": probe.BUDGET,
@@ -2099,6 +2130,7 @@ COMMANDS = {
     "models list": cmd_models_list,
     "models test": cmd_models_test,
     "models logs": cmd_models_logs,
+    "models export": cmd_models_export,
     "models scan": cmd_models_scan,
     "config get": cmd_config_get,
     "config set": cmd_config_set,
@@ -2172,6 +2204,8 @@ def main(argv):
         params = read_params(cmd)
         with management_lock(cmd):
             result = handler(params)
+        if cmd == "models export":
+            return
     except ManageError as e:
         finish(dict({"ok": False, "error": str(e), "code": e.code}, **e.extra), 1)
     except subprocess.TimeoutExpired as e:
