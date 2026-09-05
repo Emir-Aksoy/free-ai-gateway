@@ -22,6 +22,7 @@ SSH 那一侧因此只需要一个固定的白名单。
 """
 
 import json
+from contextlib import contextmanager
 import os
 import re
 import select
@@ -971,10 +972,14 @@ def cmd_models_scan(params):
     from core.storage import atomic_write_json, read_json
     from tools import probe
 
-    if params.get("cached"):
-        return {"cached": read_json(SCAN_FILE) or None}
-
     apply_env_config()
+    if params.get("cached"):
+        cached = read_json(SCAN_FILE) or None
+        if isinstance(cached, dict):
+            for field in ("providers", "summary"):
+                if isinstance(cached.get(field), dict):
+                    cached[field] = {name: value for name, value in cached[field].items() if name in PROVIDERS}
+        return {"cached": cached}
 
     providers = params.get("providers")
 
@@ -1579,6 +1584,133 @@ def cmd_providers_set(params):
     return result
 
 
+def _provider_delete_plan(name):
+    import copy
+    import hashlib
+    from core.paths import BASE_DIR, CONFIG_FILE, CAPABILITY_FILE
+    from core.registry import PROVIDERS, BUILTIN_PROVIDERS, env_file_for
+    config = load_config()
+    try:
+        with open(CAPABILITY_FILE, "r") as f:
+            cap_data = json.load(f)
+        if not isinstance(cap_data, dict) or not isinstance(cap_data.get("models", {}), dict):
+            raise ValueError("invalid capability structure")
+    except FileNotFoundError:
+        cap_data = {}
+    except (OSError, ValueError):
+        raise ManageError("模型评分文件无法读取或格式损坏，未修改任何文件", "invalid_config")
+    updated = copy.deepcopy(config)
+    capabilities = copy.deepcopy(cap_data)
+    prefix = name + ":"
+    affected, blocked, targets = [], [], set()
+    modes = normalized_modes(config)
+    chains = [(label, chain) for label, chain in modes.items() if label != "task"]
+    chains += [("task." + label, chain) for label, chain in modes["task"].items()]
+    for label, chain in chains:
+        removed = [target for target in chain if target.startswith(prefix)]
+        if removed:
+            affected.append(label)
+            targets.update(removed)
+            chain[:] = [target for target in chain if not target.startswith(prefix)]
+        if not chain:
+            blocked.append(label)
+    updated["gateway"]["modes"] = modes
+    updated["providers"] = dict(updated.get("providers") or {})
+    updated["providers"].pop(name, None)
+    if name in BUILTIN_PROVIDERS:
+        updated["providers"][name] = {"enabled": False}
+    if isinstance(updated.get("quota"), dict):
+        updated["quota"].pop(name, None)
+    old_scores = capabilities.get("models", {})
+    capabilities["models"] = {target: score for target, score in old_scores.items() if not target.startswith(prefix)}
+    errors, _ = validate_config(modes, capabilities["models"])
+
+    path = env_file_for(name)
+    action = "not_present"
+    credential_bytes = b""
+    if path and os.path.lexists(path):
+        action = "retain_shared_or_external"
+        filename = os.path.basename(path)
+        expected = os.path.join(os.path.realpath(BASE_DIR), "env", filename)
+        # Include inactive definitions: they may still share this credential file.
+        references = {other: env_file_for(other) for other in PROVIDERS}
+        for other, definition in (config.get("providers") or {}).items():
+            if isinstance(definition, dict) and definition.get("env"):
+                references[other] = os.path.join(BASE_DIR, definition["env"])
+        shared = any(other != name and location and os.path.realpath(location) == os.path.realpath(path) for other, location in references.items())
+        owned_name = re.fullmatch(re.escape(name) + r"(?:-[0-9a-f]{32})?\.env", filename)
+        if (owned_name and os.path.abspath(path) == os.path.join(os.path.abspath(BASE_DIR), "env", filename) and os.path.realpath(path) == expected
+                and not os.path.islink(path) and os.path.isfile(path) and not shared):
+            with open(path, "rb") as f:
+                credential_bytes = f.read()
+            var = PROVIDERS[name].env_var
+            lines = credential_bytes.decode("utf-8", errors="replace").splitlines()
+            if all(not line.strip() or line.lstrip().startswith("#") or line.strip().startswith(var + "=") for line in lines):
+                action = "remove_private_file"
+    revision = hashlib.sha256()
+    for filename in (CONFIG_FILE, CAPABILITY_FILE):
+        if os.path.exists(filename):
+            with open(filename, "rb") as f:
+                revision.update(f.read())
+        revision.update(b"\0")
+    revision.update(json.dumps([name, action, path], sort_keys=True).encode())
+    revision.update(credential_bytes)
+    summary = {"provider": name, "revision": revision.hexdigest(), "can_delete": not errors,
+               "affected_chains": affected, "blocked_chains": blocked, "errors": errors,
+               "models": sorted(targets), "score_count": len(old_scores) - len(capabilities["models"]),
+               "credential_action": action}
+    return summary, config, updated, capabilities, path
+
+
+def cmd_providers_delete(params):
+    import yaml
+    from core.paths import CONFIG_FILE, CAPABILITY_FILE
+    from core.storage import atomic_write_json
+
+    name = _require_provider(params)
+    summary, original, config, capabilities, path = _provider_delete_plan(name)
+    if params.get("preview") is True:
+        return summary
+    if params.get("revision") != summary["revision"]:
+        raise ManageError("配置已变化或尚未预览，请重新查看删除影响后确认", "stale_preview")
+    if not summary["can_delete"]:
+        raise ManageError("删除会使调用链不可用，请先在调用顺序中补充替代模型：" + "；".join(summary["errors"][:5]), "invalid_config")
+    with open(CONFIG_FILE, "r") as f:
+        text = f.read()
+    for section in ("gateway", "providers", "quota"):
+        if section in config and config.get(section) != original.get(section):
+            block = yaml.safe_dump({section: config[section]}, allow_unicode=True, sort_keys=False)
+            text = replace_top_level_section(text, section, block)
+    if yaml.safe_load(text) != config:
+        raise ManageError("删除配置校验失败，文件未修改", "invalid_config")
+    service = service_name()
+    port = gateway_port(service)
+    active = service_is_active(service)
+    backups = {file: backup_file(file) for file in (CONFIG_FILE, CAPABILITY_FILE)}
+    purge = summary["credential_action"] == "remove_private_file"
+    if purge:
+        backups[path] = backup_file(path)
+    try:
+        write_text_atomic(CONFIG_FILE, text)
+        if not atomic_write_json(CAPABILITY_FILE, capabilities):
+            raise ManageError("写入模型评分失败", "write_failed")
+        if purge:
+            os.unlink(path)
+        apply_env_config(config)
+        if active:
+            ok, why = restart_service(service, port)
+            if not ok:
+                raise ManageError("删除后服务异常（%s）" % why, "restart_failed")
+    except BaseException as exc:
+        try:
+            rollback_and_raise("providers delete", exc, backups, active, service, port, provider=name)
+        finally:
+            apply_env_config()
+    audit("providers delete", True, provider=name, restarted=active)
+    return dict(summary, deleted=True, restarted=active,
+                note=None if active else "服务当前未运行，启动时生效")
+
+
 def cmd_providers_catalog(params):
     from tools import probe
     name = _require_provider(params)
@@ -1588,6 +1720,7 @@ def cmd_providers_catalog(params):
 def _save_provider_config(config, name, definition, key=None):
     import yaml
     from core.paths import CONFIG_FILE, BASE_DIR
+    from core.registry import BUILTIN_PROVIDERS
     config["providers"] = dict(config.get("providers") or {})
     config["providers"][name] = definition
     with open(CONFIG_FILE, "r") as f:
@@ -1607,7 +1740,7 @@ def _save_provider_config(config, name, definition, key=None):
     try:
         if path:
             os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
-            write_env_var(path, definition["env_var"], key)
+            write_env_var(path, definition.get("env_var") or BUILTIN_PROVIDERS[name].env_var, key)
         write_text_atomic(CONFIG_FILE, text)
         apply_env_config(config)
         if was_active:
@@ -1627,7 +1760,7 @@ def _save_provider_config(config, name, definition, key=None):
 def cmd_providers_add(params):
     from core.paths import BASE_DIR
     from core.provider_config import validate_definition
-    from core.registry import PROVIDERS
+    from core.registry import PROVIDERS, BUILTIN_PROVIDERS
     apply_env_config()
     name = params.get("name")
     if isinstance(name, str) and name in PROVIDERS:
@@ -1644,9 +1777,22 @@ def cmd_providers_add(params):
         })
     except ValueError as e:
         raise ManageError(str(e), "invalid_input")
+    if name in BUILTIN_PROVIDERS:
+        cls = BUILTIN_PROVIDERS[name]
+        if definition["base_url"].rstrip("/") != cls.base_url.rstrip("/") or definition["env_var"] != cls.env_var:
+            raise ManageError("重新添加内置 Provider 必须使用其原有 API 地址和密钥变量名", "invalid_input")
+        definition = {"env": definition["env"], "free_models": definition["free_models"]}
     path = os.path.join(BASE_DIR, definition["env"])
-    if os.path.lexists(path) or os.path.islink(os.path.dirname(path)):
-        raise ManageError("目标密钥文件已存在或 env 目录为链接，拒绝覆盖", "already_exists")
+    if os.path.islink(os.path.dirname(path)):
+        raise ManageError("env 目录为链接，拒绝写入", "invalid_input")
+    # A previously deleted provider may have left a shared file behind.
+    # Give the new registration its own file without overwriting that file.
+    if os.path.lexists(path):
+        import uuid
+        definition["env"] = "env/%s-%s.env" % (name, uuid.uuid4().hex)
+        path = os.path.join(BASE_DIR, definition["env"])
+        if os.path.lexists(path):
+            raise ManageError("目标密钥文件已存在，请重试", "already_exists")
     return _save_provider_config(load_config(), name, definition, key)
 
 
@@ -1965,6 +2111,7 @@ COMMANDS = {
     "providers test": cmd_providers_test,
     "providers set": cmd_providers_set,
     "providers add": cmd_providers_add,
+    "providers delete": cmd_providers_delete,
     "providers catalog": cmd_providers_catalog,
     "providers free-models": cmd_providers_free_models,
     "install check": cmd_install_check,
@@ -1979,6 +2126,30 @@ def usage(error=None):
         "code": "usage",
         "commands": sorted(COMMANDS),
     }
+
+
+@contextmanager
+def management_lock(cmd):
+    # Serialize configuration writers across independent SSH management processes.
+    if cmd not in {"config set", "providers add", "providers set", "providers delete", "providers free-models"}:
+        yield
+        return
+    import fcntl
+    from core.paths import BASE_DIR
+    fd = os.open(os.path.join(BASE_DIR, ".manage.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise ManageError("另一项配置修改正在进行，请稍后重新检查", "busy")
+                time.sleep(0.1)
+        yield
+    finally:
+        os.close(fd)
 
 
 def main(argv):
@@ -1999,7 +2170,8 @@ def main(argv):
 
     try:
         params = read_params(cmd)
-        result = handler(params)
+        with management_lock(cmd):
+            result = handler(params)
     except ManageError as e:
         finish(dict({"ok": False, "error": str(e), "code": e.code}, **e.extra), 1)
     except subprocess.TimeoutExpired as e:

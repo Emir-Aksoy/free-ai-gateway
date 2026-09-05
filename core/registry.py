@@ -83,6 +83,7 @@ def configure_providers(mapping):
     from core.paths import BASE_DIR
     custom = {}
     env_files = {}
+    removed = set()
     for name, raw in mapping.items():
         cfg = raw or {}
         if not isinstance(cfg, dict):
@@ -90,6 +91,9 @@ def configure_providers(mapping):
         if name in BUILTIN_PROVIDERS:
             if any(k in cfg for k in ("type", "base_url", "env_var")):
                 raise ValueError("不能覆盖内置 Provider: %s" % name)
+            if cfg.get("enabled") is False:
+                removed.add(name)
+                continue
         else:
             cfg = validate_definition(name, cfg)
             custom[name] = cfg
@@ -100,6 +104,12 @@ def configure_providers(mapping):
             env_files[name] = path if os.path.isabs(path) else os.path.join(BASE_DIR, path)
     with _lock:
         old = dict(_definitions)
+        for name, cls in BUILTIN_PROVIDERS.items():
+            if name in removed:
+                PROVIDERS.pop(name, None)
+                _instances.pop(name, None)
+            else:
+                PROVIDERS[name] = cls
         for name in list(PROVIDERS):
             if name not in BUILTIN_PROVIDERS and name not in custom:
                 PROVIDERS.pop(name)
