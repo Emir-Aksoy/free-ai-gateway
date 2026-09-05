@@ -872,9 +872,21 @@ def cmd_models_list(params):
     recent = RoutingMetrics()
     cooldowns = read_cooldowns()
 
+    from core.model_logs import ModelCallLog
+    import sqlite3
+    test_log = ModelCallLog()
     out = []
 
     for target in order:
+        last_test = None
+        try:
+            entries = test_log.read(target, limit=1, source="manual_test")["entries"]
+            if entries:
+                last_test = {key: entries[0].get(key) for key in
+                             ("time", "outcome", "status", "code", "duration")}
+        except (OSError, sqlite3.Error, ValueError):
+            pass
+
         provider, model = target.split(":", 1) if ":" in target else (target, "")
         stats = models.get(target, {})
         calls = stats.get("calls", 0)
@@ -900,6 +912,7 @@ def cmd_models_list(params):
                 "capability": capability.get(target),
                 "provider_registered": provider in PROVIDERS,
                 "provider_block": recent.provider_status(provider),
+                "last_test": last_test,
                 "recent": {task: recent.stats(target, task) for task in membership[target]},
             }
         )
