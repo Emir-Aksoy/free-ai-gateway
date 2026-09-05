@@ -39,6 +39,12 @@ Credential/permission errors temporarily pause the Provider; rate limits or insu
 
 Disabled models receive independent basic health probes after 15, 30 and 60 minutes, then hourly. A basic recovery does not guarantee long-context, streaming or tool-call support. A successful manual model test can clear a Provider pause; model recovery remains separate.
 
+## Interactive model tests
+
+In v1.0.1, open the model test panel from Models or a Provider card. Choose a Provider, select or enter a model ID, enter your question and output limit, then start the test. No generation request is sent until you click Start. Testing consumes upstream quota; confirm your account plan and model pricing first.
+
+The panel shows success/failure, HTTP status, the complete reply or original error, upstream duration and total waiting time including SSH overhead. A live timer runs while waiting. Each test sends one non-streaming request to the selected model without fallback. Empty output is a failure. Expand the original response to inspect complete credential-redacted data. Results are logged as manual tests and do not alter business success rates or routing scores. Model output remains in its original language.
+
 ## Logs and route explanations
 
 Fetch logs on demand by time, Provider or Provider/model, with optional source and outcome filters. Each page is limited to 50 records, with no polling.

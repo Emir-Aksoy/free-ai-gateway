@@ -250,17 +250,17 @@ def model_catalog(name, key=None, timeout=LIST_TIMEOUT):
             result[model] = {"id": model, "free": True, "basis": "用户明确登记；目录未列出", "listed": False}
     return sorted(result.values(), key=lambda item: item["id"])
 
-def test_model(name, model, key=None, timeout=TEST_TIMEOUT, max_tokens=256, capture=False):
+def test_model(name, model, key=None, timeout=TEST_TIMEOUT, max_tokens=256, capture=False, prompt="hi"):
     if not capture:
-        return _test_model(name, model, key, timeout, max_tokens)
-    trace = CallTrace({"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": max_tokens})
+        return _test_model(name, model, key, timeout, max_tokens, prompt)
+    trace = CallTrace({"model": model, "messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens})
     with trace.bind():
-        result = _test_model(name, model, key, timeout, max_tokens)
+        result = _test_model(name, model, key, timeout, max_tokens, prompt)
     result["_details"] = trace.snapshot()
     return result
 
 
-def _test_model(name, model, key=None, timeout=TEST_TIMEOUT, max_tokens=256):
+def _test_model(name, model, key=None, timeout=TEST_TIMEOUT, max_tokens=256, prompt="hi"):
     """对单个模型发一次最小请求。2xx 还要带有效文本或工具调用才算可用。"""
 
     cls = provider_class(name)
@@ -274,7 +274,7 @@ def _test_model(name, model, key=None, timeout=TEST_TIMEOUT, max_tokens=256):
 
     payload = {
         "model": model,
-        "messages": [{"role": "user", "content": "hi"}],
+        "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
     }
 
@@ -303,44 +303,48 @@ def _test_model(name, model, key=None, timeout=TEST_TIMEOUT, max_tokens=256):
         result["error"] = scrub(str(e), key)[:200]
         return result
 
-    capture_response(trace_attempt, response)
-    result["latency"] = round(time.time() - start, 2)
-    result["status"] = response.status_code
-
-    if response.status_code >= 400:
-        result["reason"] = classify(response.status_code, response.text)
-        result["error"] = scrub(response.text[:2048], key)[:200]
-        return result
-
     try:
-        body = response.json()
-    except ValueError:
-        body = None
+        capture_response(trace_attempt, response)
+        result["latency"] = round(time.time() - start, 2)
+        result["status"] = response.status_code
 
-    choices = body.get("choices") if isinstance(body, dict) else None
+        if response.status_code >= 400:
+            result["reason"] = classify(response.status_code, response.text)
+            result["error"] = scrub(response.text[:2048], key)[:200]
+            return result
 
-    if (
-        not isinstance(body, dict)
-        or body.get("error")
-        or not isinstance(choices, list)
-        or not choices
-        or not isinstance(choices[0], dict)
-    ):
-        result["reason"] = "接口不兼容"
-        result["error"] = scrub(
-            str(body.get("error")) if isinstance(body, dict) and body.get("error")
-            else "响应不是 OpenAI 格式（choices 缺失或为空）",
-            key,
-        )[:200]
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+
+        choices = body.get("choices") if isinstance(body, dict) else None
+
+        if (
+            not isinstance(body, dict)
+            or body.get("error")
+            or not isinstance(choices, list)
+            or not choices
+            or not isinstance(choices[0], dict)
+        ):
+            result["reason"] = "接口不兼容"
+            result["error"] = scrub(
+                str(body.get("error")) if isinstance(body, dict) and body.get("error")
+                else "响应不是 OpenAI 格式（choices 缺失或为空）",
+                key,
+            )[:200]
+            return result
+
+        if not response_has_output(body):
+            result["reason"] = "空响应"
+            result["error"] = "上游未返回有效正文或工具调用"
+            return result
+
+        result["ok"] = True
         return result
-
-    if not response_has_output(body):
-        result["reason"] = "空响应"
-        result["error"] = "上游未返回有效正文或工具调用"
-        return result
-
-    result["ok"] = True
-    return result
+    finally:
+        close = getattr(response, "close", None)
+        if callable(close): close()
 
 
 def test_key(name, key, timeout=LIST_TIMEOUT):

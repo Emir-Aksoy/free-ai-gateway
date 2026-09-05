@@ -956,16 +956,21 @@ def _record_probe_results(results):
                     "空响应": "empty_response", "接口不兼容": "invalid_response",
                     "超出时间预算": "budget_exceeded", "配置错误": "config_error"}
     for result in results:
+        details = result.pop("_details", None)
+        input_chars = result.pop("_input_chars", 2)
+        max_tokens = result.pop("_max_tokens", 256)
+        if result.get("ok"):
+            try:
+                from core.routing_metrics import RoutingMetrics
+                RoutingMetrics().clear_provider(result["target"].split(":", 1)[0])
+            except Exception:
+                pass
         try:
             code = None if result["ok"] else reason_codes.get(result.get("reason"),
                          "http_error" if result.get("status") else "test_failed")
             skipped = code in ("budget_exceeded", "config_error", "missing_key")
             outcome = "success" if result["ok"] else "skipped" if skipped else "failed"
-            summary = {} if skipped else {"input_messages": 1, "input_chars": 2, "max_tokens": 256, "tool_count": 0}
-            if result["ok"]:
-                from core.routing_metrics import RoutingMetrics
-                RoutingMetrics().clear_provider(result["target"].split(":", 1)[0])
-            details = result.pop("_details", None)
+            summary = {} if skipped else {"input_messages": 1, "input_chars": input_chars, "max_tokens": max_tokens, "tool_count": 0}
             log.write(result["target"], source="manual_test", outcome=outcome, details=details,
                       duration=result.get("latency"), status=result.get("status"), code=code, stream=False, **summary)
         except Exception:
@@ -976,6 +981,20 @@ def cmd_models_test(params):
     from core.paths import TEST_FILE
     from core.storage import atomic_write_json, read_json
     from tools import probe
+
+    verbose = params.get("verbose", False)
+    if type(verbose) is not bool:
+        raise ManageError("verbose 必须为布尔值", "invalid_input")
+    prompt, max_tokens = params.get("prompt", "hi"), params.get("max_tokens", 512)
+    if verbose:
+        if params.get("cached") or not isinstance(params.get("targets"), list) or len(params["targets"]) != 1:
+            raise ManageError("交互测试必须选择一个模型", "invalid_input")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 16000:
+            raise ManageError("测试问题须为1至16000字符", "invalid_input")
+        if type(max_tokens) is not int or not 1 <= max_tokens <= 4096:
+            raise ManageError("测试输出上限须为1至4096", "invalid_input")
+    elif "prompt" in params or "max_tokens" in params:
+        raise ManageError("自定义问题需要单模型交互测试", "invalid_input")
 
     if params.get("cached"):
         return {"cached": read_json(TEST_FILE) or None}
@@ -991,8 +1010,18 @@ def cmd_models_test(params):
     if not targets:
         raise ManageError("配置里没有任何模型", "invalid_config")
 
-    results = probe.test_targets(targets, capture=True)
+    if verbose:
+        provider, model = targets[0].split(":", 1)
+        results = [probe.test_model(provider, model, prompt=prompt, max_tokens=max_tokens, capture=True)]
+        details = results[0].get("_details")
+        results[0]["_input_chars"] = len(prompt)
+        results[0]["_max_tokens"] = max_tokens
+    else:
+        results = probe.test_targets(targets, capture=True)
     _record_probe_results(results)
+    if verbose:
+        results[0]["details"] = details
+
     payload = {
         "results": results,
         "summary": {"total": len(results), "ok": sum(1 for r in results if r["ok"])},
