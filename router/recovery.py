@@ -6,6 +6,7 @@ import time
 from core.registry import get_provider
 from core.model_logs import failure_code
 from core.call_trace import CallTrace
+from router.policy import failure_category
 from providers.base import ProviderError, response_has_output, usage_tokens
 
 
@@ -67,6 +68,8 @@ class RecoveryWorker:
         if not state.is_disabled(target):
             return
         provider_name, model = self.router.parse_target(target)
+        if self.router._provider_block(provider_name):
+            return
         # 在配额锁内检查并预留本次探测，避免多个探测争用剩余额度。
         with self.router.quota.lock:
             if not self.router.quota.allowed(provider_name):
@@ -94,7 +97,10 @@ class RecoveryWorker:
         except ProviderError as error:
             trace.data["error"] = {"type": type(error).__name__, "message": str(error)}
             tokens = error.tokens
-            code, status = failure_code(error), error.status
+            category = failure_category(error)
+            code, status = (failure_code(error) if category == "reliability" else category), error.status
+            if category in ("provider_auth", "rate_limited") and hasattr(self.router, "metrics"):
+                self.router.metrics.block(provider_name, category, error.retry_after or (900 if category == "provider_auth" else 60))
         except Exception as error:
             trace.data["error"] = {"type": type(error).__name__, "message": str(error)}
             code = "upstream_error"

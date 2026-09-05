@@ -7,6 +7,7 @@
 """
 
 import json
+import sqlite3
 import os
 import threading
 import time
@@ -21,6 +22,8 @@ from core.model_logs import ModelCallLog, failure_code
 from core.call_trace import CallTrace
 from core.quota import QuotaManager
 from core.capability import CapabilityManager
+from core.routing_metrics import RoutingMetrics
+from router.policy import effective_policy, failure_category
 from providers.base import ProviderError, response_has_output, usage_tokens
 
 # 冷却梯度：首次失败短冷却给个机会，连续失败才拉长。
@@ -55,6 +58,7 @@ class AIRouter:
         self.model_log = ModelCallLog()
         self.quota = QuotaManager()
         self.capability = CapabilityManager()
+        self.metrics = RoutingMetrics()
 
         # ThreadingHTTPServer 下多个请求会并发读写这些结构。
         self.lock = threading.RLock()
@@ -150,7 +154,7 @@ class AIRouter:
 
         return self.modes["balanced"]
 
-    def rank_routes(self, routes, task_type=None):
+    def _legacy_rank_routes(self, routes, task_type=None):
         now = time.time()
 
         with self.lock:
@@ -211,6 +215,90 @@ class AIRouter:
             return list(normal)
 
         return ranked + tail
+
+    def rank_routes(self, routes, task_type=None):
+        if not hasattr(self, "metrics"):
+            return self._legacy_rank_routes(routes, task_type)
+        return self.explain_routes(routes, task_type)["order"]
+
+    def explain_routes(self, routes, task_type):
+        policy = effective_policy(self.routing, task_type)
+        now = time.time()
+        with self.lock:
+            cooldowns = dict(self.cooldowns)
+        candidates = []
+        for position, target in enumerate(routes):
+            recent = self.metrics.stats(target, task_type)
+            cap = self.capability_score(self.capability.get(target), task_type)
+            # Missing/low samples are neutral. Completion duration is never used as TTFT.
+            speed = 50
+            if recent["ttft_samples"] >= MIN_SAMPLES and recent["ttft"] is not None:
+                speed = next((points for threshold, points in SPEED_TIERS if recent["ttft"] <= threshold), SPEED_FLOOR)
+            parts = {"capability": round(cap * .7, 3),
+                     "success": round(recent["smoothed_success_rate"] * 20, 3) if policy["use_success_rate"] else 0,
+                     "latency": speed * .1 if policy["use_latency"] else 0}
+            provider = target.split(":", 1)[0]
+            blocked = self.metrics.provider_status(provider)
+            skip = (blocked["reason"] if blocked else
+                    "disabled_pending_recovery" if self.state.is_disabled(target) else
+                    "cooldown" if cooldowns.get(target, 0) > now else
+                    "quota_exceeded" if not self.quota.allowed(provider) else None)
+            candidates.append({"target": target, "position": position + 1,
+                               "score": round(sum(parts.values()), 3), "components": parts,
+                               "recent": recent, "skip_reason": skip,
+                               "retry_at": blocked["until"] if blocked else cooldowns.get(target)})
+        active = [row for row in candidates if cooldowns.get(row["target"], 0) <= now]
+        if policy["mode"] != "manual":
+            active.sort(key=lambda row: (policy["mode"] == "scored" and row["target"] in self.fallbacks, -row["score"]))
+            if policy["mode"] == "preferred" and routes:
+                active.sort(key=lambda row: row["target"] != routes[0])
+        order = [row["target"] for row in active]
+        for row in candidates:
+            row["rank"] = order.index(row["target"]) + 1 if row["target"] in order else None
+        return {"task": task_type, "policy": policy, "candidates": candidates, "order": order,
+                "window_hours": 24, "sample_limit": 100}
+
+    def _prepare_routes(self, mode, task_type, context):
+        configured = self.get_routes(mode, task_type)
+        if not hasattr(self, "metrics"):
+            return self.rank_routes(configured, task_type or mode)
+        decision = self.explain_routes(configured, task_type or mode)
+        context["decision"] = decision
+        for row in decision["candidates"]:
+            if row["target"] not in decision["order"]:
+                self._log_attempt(row["target"], context, "skipped", time.time(), code=row["skip_reason"] or "cooldown")
+        return decision["order"]
+
+    def _provider_block(self, provider):
+        return self.metrics.provider_status(provider) if hasattr(self, "metrics") else None
+
+    def _record_metrics(self, target, context, success, start, result=None, eligible=True):
+        if not hasattr(self, "metrics"): return
+        usage = result.get("usage", {}) if isinstance(result, dict) else {}
+        output = usage.get("completion_tokens") if isinstance(usage, dict) else None
+        values = {"duration": round(time.time() - start, 3), "ttft": context.get("ttft"),
+                  "output_tokens": output if output is not None else context.get("output_tokens")}
+        context["metrics"] = values
+        try:
+            self.metrics.record(target, context.get("mode", "balanced"), success, eligible=eligible, **values)
+        except (OSError, ValueError, sqlite3.Error):
+            pass
+
+    def _record_failure(self, target, context, start, error):
+        category = failure_category(error)
+        context["failure_category"] = category
+        eligible = category == "reliability"
+        if eligible:
+            self.state.record_failure(target)
+            self.mark_failure(target)
+        else:
+            self.state.record_failure(target, eligible=False)
+        if not eligible and category in ("provider_auth", "rate_limited") and hasattr(self, "metrics"):
+            try:
+                self.metrics.block(target.split(":",1)[0], category, getattr(error, "retry_after", None) or (900 if category == "provider_auth" else 60))
+            except (OSError, ValueError, sqlite3.Error):
+                pass
+        self._record_metrics(target, context, False, start, eligible=eligible)
 
     def capability_score(self, cap, task_type):
         if task_type in ("fast", "balanced", "writing") and task_type in cap:
@@ -276,7 +364,7 @@ class AIRouter:
             if outcome in ("success", "cancelled"):
                 fields.pop("next_target", None)
             fields.update(outcome=outcome, duration=time.time() - start,
-                          code=code or (failure_code(error) if error else None),
+                          code=code or (context.get("failure_category") if context.get("failure_category") != "reliability" else None) or (failure_code(error) if error else None),
                           status=getattr(error, "status", None))
             trace = fields.pop("_trace", None)
             if trace is not None:
@@ -299,6 +387,10 @@ class AIRouter:
         context["_trace"] = trace
         start = time.time()
 
+        blocked = self._provider_block(provider_name)
+        if blocked:
+            self._log_attempt(target, context, "skipped", start, code=blocked["reason"])
+            return None, {"provider": provider_name, "reason": blocked["reason"]}
         if self.state.is_disabled(target):
             self._log_attempt(target, context, "skipped", start, code="disabled_pending_recovery")
             return None, {"model": target, "reason": "disabled_pending_recovery"}
@@ -324,6 +416,7 @@ class AIRouter:
 
             latency = round(time.time() - start, 3)
 
+            self._record_metrics(target, context, True, start, result)
             self.state.record_success(target, latency, tokens=tokens)
             self.mark_success(target)
             self._log_attempt(target, context, "success", start)
@@ -340,8 +433,7 @@ class AIRouter:
         except ProviderError as e:
             if e.tokens:
                 self.quota.record_tokens_only(provider_name, e.tokens)
-            self.state.record_failure(target)
-            self.mark_failure(target)
+            self._record_failure(target, context, start, e)
             self._log_attempt(target, context, "failed", start, error=e)
 
             return None, {
@@ -351,8 +443,7 @@ class AIRouter:
             }
 
         except Exception as e:
-            self.state.record_failure(target)
-            self.mark_failure(target)
+            self._record_failure(target, context, start, e)
             self._log_attempt(target, context, "failed", start, error=e)
 
             return None, {
@@ -361,10 +452,10 @@ class AIRouter:
             }
 
     def chat(self, mode, messages, task_type=None, params=None, request_body=None):
-        routes = self.rank_routes(self.get_routes(mode, task_type), task_type or mode)
         errors = []
 
         context = self._log_context(mode, messages, params, False, task_type, request_body)
+        routes = self._prepare_routes(mode, task_type, context)
         for index, target in enumerate(routes):
             context["next_target"] = routes[index + 1] if index + 1 < len(routes) else None
             result, error = self._attempt(
@@ -388,16 +479,23 @@ class AIRouter:
         元信息 success 表示已选中可输出的流，最终统计由返回的生成器完成。
         已输出实质内容后的异常直接向调用方抛出，不得混入另一模型。
         """
-        routes = self.rank_routes(self.get_routes(mode, task_type), task_type or mode)
         errors = []
 
         context = self._log_context(mode, messages, params, True, task_type, request_body)
+        routes = self._prepare_routes(mode, task_type, context)
         for index, target in enumerate(routes):
             context["next_target"] = routes[index + 1] if index + 1 < len(routes) else None
             start = time.time()
             provider_name, model = self.parse_target(target)
             trace = CallTrace(context.get("request"))
             context = dict(context, _trace=trace)
+            for field in ("failure_category", "metrics", "ttft", "output_tokens"):
+                context.pop(field, None)
+            blocked = self._provider_block(provider_name)
+            if blocked:
+                self._log_attempt(target, context, "skipped", start, code=blocked["reason"])
+                errors.append({"provider": provider_name, "reason": blocked["reason"]})
+                continue
             if self.state.is_disabled(target):
                 self._log_attempt(target, context, "skipped", start, code="disabled_pending_recovery")
                 errors.append({"model": target, "reason": "disabled_pending_recovery"})
@@ -423,6 +521,9 @@ class AIRouter:
                         break
                     parsed = self._parse_stream_chunk(chunk)
                     tokens = max(tokens, usage_tokens(parsed))
+                    usage = parsed.get("usage")
+                    if isinstance(usage, dict) and type(usage.get("completion_tokens")) is int:
+                        context["output_tokens"] = usage["completion_tokens"]
                     buffered.append(chunk)
                     if response_has_output(parsed, streaming=True):
                         break
@@ -436,8 +537,7 @@ class AIRouter:
                 self._close_stream(iterator)
                 if tokens:
                     self.quota.record_tokens_only(provider_name, tokens)
-                self.state.record_failure(target)
-                self.mark_failure(target)
+                self._record_failure(target, context, start, error)
                 self._log_attempt(target, context, "failed", start, error=error)
                 detail = {"model": target, "error": str(error)[:300]}
                 if isinstance(error, ProviderError):
@@ -455,7 +555,7 @@ class AIRouter:
                 "errors": errors,
             }
 
-            context = dict(context, next_target=None)
+            context = dict(context, next_target=None, ttft=latency)
 
             def generate():
                 nonlocal tokens
@@ -471,16 +571,19 @@ class AIRouter:
                             break
                         parsed = self._parse_stream_chunk(chunk)
                         tokens = max(tokens, usage_tokens(parsed))
+                        usage = parsed.get("usage")
+                        if isinstance(usage, dict) and type(usage.get("completion_tokens")) is int:
+                            context["output_tokens"] = usage["completion_tokens"]
                         yield chunk
                 except GeneratorExit:
                     self._log_attempt(target, context, "cancelled", start, code="client_closed")
                     raise
                 except Exception as error:
+                    self._record_failure(target, context, start, error)
                     self._log_attempt(target, context, "failed", start, error=error)
-                    self.state.record_failure(target)
-                    self.mark_failure(target)
                     raise
                 else:
+                    self._record_metrics(target, context, True, start)
                     self.state.record_success(target, latency, tokens=tokens)
                     self.mark_success(target)
                     self._log_attempt(target, context, "success", start)
@@ -502,7 +605,9 @@ class AIRouter:
         except (ValueError, TypeError):
             raise ProviderError("上游流式响应不是合法 JSON", retryable=True, code="invalid_json")
         if not isinstance(parsed, dict) or parsed.get("error"):
-            raise ProviderError("上游返回流式错误", retryable=True, code="stream_error")
+            error = parsed.get("error") if isinstance(parsed, dict) else None
+            status = error.get("code") if isinstance(error, dict) else None
+            raise ProviderError("上游返回流式错误", status=status if type(status) is int and 400 <= status <= 599 else None, retryable=True, code="stream_error")
         return parsed
 
     @staticmethod

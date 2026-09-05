@@ -868,6 +868,8 @@ def cmd_models_list(params):
     state = read_json(STATE_FILE)
     models = state.get("models", {}) if state.get("date") == day else {}
     capability = read_json(CAPABILITY_FILE).get("models", {})
+    from core.routing_metrics import RoutingMetrics
+    recent = RoutingMetrics()
     cooldowns = read_cooldowns()
 
     out = []
@@ -897,6 +899,8 @@ def cmd_models_list(params):
                 "cooldown_left": cooldowns.get(target, {}).get("seconds_left", 0),
                 "capability": capability.get(target),
                 "provider_registered": provider in PROVIDERS,
+                "provider_block": recent.provider_status(provider),
+                "recent": {task: recent.stats(target, task) for task in membership[target]},
             }
         )
 
@@ -911,7 +915,8 @@ def cmd_models_logs(params):
         return ModelCallLog().read(params.get("target"), limit=params.get("limit", 50),
                                    before=params.get("before"), source=params.get("source"),
                                    outcome=params.get("outcome"), provider=params.get("provider"),
-                                   start_at=params.get("start_at"), end_at=params.get("end_at"))
+                                   start_at=params.get("start_at"), end_at=params.get("end_at"),
+                                   request_id=params.get("request_id"))
     except (ValueError, TypeError):
         raise ManageError("日志查询参数无效，请刷新后重试", "invalid_input")
     except (OSError, sqlite3.Error):
@@ -957,6 +962,9 @@ def _record_probe_results(results):
             skipped = code in ("budget_exceeded", "config_error", "missing_key")
             outcome = "success" if result["ok"] else "skipped" if skipped else "failed"
             summary = {} if skipped else {"input_messages": 1, "input_chars": 2, "max_tokens": 256, "tool_count": 0}
+            if result["ok"]:
+                from core.routing_metrics import RoutingMetrics
+                RoutingMetrics().clear_provider(result["target"].split(":", 1)[0])
             details = result.pop("_details", None)
             log.write(result["target"], source="manual_test", outcome=outcome, details=details,
                       duration=result.get("latency"), status=result.get("status"), code=code, stream=False, **summary)
@@ -1151,14 +1159,26 @@ def validate_config(modes, capability):
 def validate_routing(value):
     if not isinstance(value, dict):
         raise ManageError("routing 必须是对象", "invalid_config")
-    if set(value) - set(DEFAULT_ROUTING):
+    if set(value) - (set(DEFAULT_ROUTING) | {"tasks"}):
         raise ManageError("routing 含未知字段", "invalid_config")
     policy = dict(DEFAULT_ROUTING, **value)
-    if policy["mode"] not in ("manual", "scored"):
-        raise ManageError("排序方式必须为 manual 或 scored", "invalid_config")
+    if policy["mode"] not in ("manual", "scored", "preferred"):
+        raise ManageError("排序方式必须为 manual、scored 或 preferred", "invalid_config")
     for field in ("use_latency", "use_success_rate"):
         if not isinstance(policy[field], bool):
             raise ManageError("%s 必须为布尔值" % field, "invalid_config")
+    if "tasks" in value:
+        from router.policy import TASKS
+        tasks = value["tasks"]
+        if not isinstance(tasks, dict) or set(tasks) - set(TASKS):
+            raise ManageError("任务排序配置无效", "invalid_config")
+        clean = {}
+        for task, override in tasks.items():
+            if not isinstance(override, dict) or set(override) - set(DEFAULT_ROUTING):
+                raise ManageError("任务排序含未知字段", "invalid_config")
+            checked = validate_routing(override)
+            clean[task] = {key: checked[key] for key in override}
+        policy["tasks"] = clean
     return policy
 
 

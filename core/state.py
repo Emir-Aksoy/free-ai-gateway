@@ -104,14 +104,14 @@ class StateManager:
 
             # 恢复了就解禁，免费额度按天重置，中途恢复是常事
             if model["disabled"]:
-                model["failure_baseline"] = model["failed"]
+                model["failure_baseline"] = model["failed"] - model.get("excluded_failures", 0)
             model["disabled"] = False
             model.pop("recovery", None)
 
             self.store.mark_dirty()
             self.store.maybe_flush(self.state)
 
-    def record_failure(self, key):
+    def record_failure(self, key, eligible=True):
         with self.lock:
             model = self.get_model(key)
 
@@ -119,8 +119,11 @@ class StateManager:
             model["failed"] += 1
             newly_disabled = False
 
-            if model["failed"] - model.get("failure_baseline", 0) >= DISABLE_AFTER_FAILURES:
-                rate = model["success"] / max(model["calls"], 1)
+            if not eligible:
+                model["excluded_failures"] = model.get("excluded_failures", 0) + 1
+            failures = model["failed"] - model.get("excluded_failures", 0)
+            if eligible and failures - model.get("failure_baseline", 0) >= DISABLE_AFTER_FAILURES:
+                rate = model["success"] / max(model["success"] + failures, 1)
 
                 if rate < DISABLE_SUCCESS_RATE and not model["disabled"]:
                     model["disabled"] = True
@@ -157,7 +160,7 @@ class StateManager:
                             last_result="recovered" if success else "failed")
             if success:
                 model["disabled"] = False
-                model["failure_baseline"] = model["failed"]
+                model["failure_baseline"] = model["failed"] - model.get("excluded_failures", 0)
                 recovery["next_at"] = None
             else:
                 recovery["next_at"] = now + RECOVERY_DELAYS[min(attempts, len(RECOVERY_DELAYS) - 1)]

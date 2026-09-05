@@ -5,6 +5,8 @@
 """
 
 import json
+import math
+from email.utils import parsedate_to_datetime
 import os
 import random
 import re
@@ -23,12 +25,13 @@ class ProviderError(Exception):
     路由层据此决定是就地重试还是直接降级到下一个模型。
     """
 
-    def __init__(self, message, status=None, retryable=False, tokens=0, code=None):
+    def __init__(self, message, status=None, retryable=False, tokens=0, code=None, retry_after=None):
         super().__init__(message)
         self.status = status
         self.retryable = retryable
         self.tokens = tokens
         self.code = code
+        self.retry_after = retry_after
 
 
 def usage_tokens(payload):
@@ -153,10 +156,14 @@ class BaseProvider:
     def load_key(self, env_file):
         if not env_file or not os.path.exists(env_file):
             raise ProviderError(
-                "%s: 密钥文件不存在 %s" % (self.name, env_file)
+                "%s: 密钥文件不存在 %s" % (self.name, env_file), code="missing_key"
             )
 
-        with open(env_file, "r") as f:
+        try:
+            key_stream = open(env_file, "r")
+        except OSError:
+            raise ProviderError("%s: 密钥文件无法读取" % self.name, code="missing_key") from None
+        with key_stream as f:
             for line in f:
                 line = line.strip()
 
@@ -167,7 +174,7 @@ class BaseProvider:
                         return value
 
         raise ProviderError(
-            "%s: %s 未在 %s 中找到" % (self.name, self.env_var, env_file)
+            "%s: %s 未在 %s 中找到" % (self.name, self.env_var, env_file), code="missing_key"
         )
 
     def headers(self):
@@ -200,7 +207,7 @@ class BaseProvider:
 
         if retry_after:
             try:
-                delay = min(float(retry_after), self.backoff_cap)
+                delay = min(max(0, float(retry_after)), self.backoff_cap)
                 time.sleep(delay)
                 return delay
             except (TypeError, ValueError):
@@ -217,6 +224,15 @@ class BaseProvider:
 
         return BEARER_PATTERN.sub("Bearer ****", text)
 
+    @staticmethod
+    def retry_seconds(value):
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            try: seconds = parsedate_to_datetime(value).timestamp() - time.time()
+            except (TypeError, ValueError, OverflowError): return None
+        return min(max(1, seconds), 86400) if math.isfinite(seconds) else None
+
     def _raise_for_response(self, response):
         if response.status_code < 400:
             return
@@ -228,6 +244,7 @@ class BaseProvider:
             status=response.status_code,
             code="http_error",
             retryable=response.status_code in RETRYABLE_STATUS,
+            retry_after=self.retry_seconds(response.headers.get("Retry-After")),
         )
 
     def _request(self, payload, stream, timeout=None):

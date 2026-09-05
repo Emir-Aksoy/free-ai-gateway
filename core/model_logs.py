@@ -16,6 +16,10 @@ MAX_DETAIL_BYTES = 512 * 1024 * 1024
 SOURCES = {'business', 'manual_test', 'recovery'}
 OUTCOMES = {'success', 'failed', 'skipped', 'cancelled'}
 REASONS = {
+    'provider_auth': '服务商密钥或权限异常，请检查 Provider 配置',
+    'rate_limited': '服务商限流或余额不足，等待额度恢复',
+    'request_incompatible': '当前请求或模型不兼容，不计入模型可靠性',
+    'cooldown': '模型正在冷却，暂时跳过',
     'empty_response': '上游没有返回有效正文或工具调用',
     'invalid_json': '上游返回的内容不是合法 JSON',
     'stream_incomplete': '流式响应在正常结束标记前中断',
@@ -74,6 +78,13 @@ class ModelCallLog:
         next_target = fields.get('next_target')
         if isinstance(next_target, str) and ':' in next_target and len(next_target) <= 512:
             row['next_target'] = next_target
+        for key in ('decision', 'metrics'):
+            if isinstance(fields.get(key), dict):
+                from core.call_trace import redact, known_secrets
+                try: row[key] = redact(fields[key], known_secrets())
+                except (OSError, ValueError, TypeError): pass
+        if fields.get('failure_category') in ('provider_auth','rate_limited','request_incompatible','reliability'):
+            row['failure_category'] = fields['failure_category']
         details = fields.get('details')
         compressed = None
         if isinstance(details, dict):
@@ -94,6 +105,7 @@ class ModelCallLog:
             db.execute('CREATE TABLE IF NOT EXISTS calls (id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT NOT NULL, created_at REAL NOT NULL, payload TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS details (call_id INTEGER PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE, payload BLOB NOT NULL)')
             db.execute('CREATE INDEX IF NOT EXISTS calls_target_id ON calls(target,id)')
+            db.execute("CREATE INDEX IF NOT EXISTS calls_request_id ON calls(json_extract(payload,'$.request_id'),id)")
             db.execute('CREATE INDEX IF NOT EXISTS calls_time_id ON calls(created_at,id)')
             db.execute('CREATE INDEX IF NOT EXISTS calls_target_time_id ON calls(target,created_at,id)')
             db.execute("CREATE INDEX IF NOT EXISTS calls_provider_time_id ON calls(substr(target,1,instr(target,':')-1),created_at,id)")
@@ -114,7 +126,7 @@ class ModelCallLog:
                     db.execute('DELETE FROM calls WHERE id <= ?', (cutoff,))
 
     def read(self, target=None, limit=50, before=None, source=None, outcome=None,
-             provider=None, start_at=None, end_at=None):
+             provider=None, start_at=None, end_at=None, request_id=None):
         if target is not None and (not isinstance(target, str) or ':' not in target or len(target) > 512):
             raise ValueError('请选择有效模型')
         if provider is not None and (not isinstance(provider, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', provider)):
@@ -134,11 +146,15 @@ class ModelCallLog:
                 raise ValueError('时间范围无效')
         if start_at is not None and end_at is not None and start_at > end_at:
             raise ValueError('开始时间不能晚于结束时间')
+        if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r'[a-f0-9]{32}', request_id)):
+            raise ValueError('请求编号无效')
         result = {'target': target, 'provider': provider, 'entries': [], 'next_cursor': None,
                   'retention_limit': MAX_RECORDS, 'available': self.path.is_file()}
         if not result['available']:
             return result
         where = ['1 = 1']; args = []
+        if request_id is not None:
+            where.append("json_extract(payload, '$.request_id') = ?"); args.append(request_id)
         if target is not None:
             where.append('target = ?'); args.append(target)
         elif provider is not None:
