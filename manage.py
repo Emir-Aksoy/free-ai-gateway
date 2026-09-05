@@ -909,7 +909,8 @@ def cmd_models_logs(params):
     try:
         return ModelCallLog().read(params.get("target"), limit=params.get("limit", 50),
                                    before=params.get("before"), source=params.get("source"),
-                                   outcome=params.get("outcome"))
+                                   outcome=params.get("outcome"), provider=params.get("provider"),
+                                   start_at=params.get("start_at"), end_at=params.get("end_at"))
     except (ValueError, TypeError):
         raise ManageError("日志查询参数无效，请刷新后重试", "invalid_input")
     except (OSError, sqlite3.Error):

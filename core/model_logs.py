@@ -79,38 +79,61 @@ class ModelCallLog:
         with closing(sqlite3.connect(str(self.path), timeout=0.2)) as db, db:
             db.execute('CREATE TABLE IF NOT EXISTS calls (id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT NOT NULL, created_at REAL NOT NULL, payload TEXT NOT NULL)')
             db.execute('CREATE INDEX IF NOT EXISTS calls_target_id ON calls(target,id)')
+            db.execute('CREATE INDEX IF NOT EXISTS calls_time_id ON calls(created_at,id)')
+            db.execute('CREATE INDEX IF NOT EXISTS calls_target_time_id ON calls(target,created_at,id)')
+            db.execute("CREATE INDEX IF NOT EXISTS calls_provider_time_id ON calls(substr(target,1,instr(target,':')-1),created_at,id)")
             cursor = db.execute('INSERT INTO calls(target,created_at,payload) VALUES (?,?,?)',
                                 (target, time.time(), json.dumps(row, ensure_ascii=False)))
             db.execute('DELETE FROM calls WHERE id <= ?', (cursor.lastrowid - MAX_RECORDS,))
 
-    def read(self, target, limit=50, before=None, source=None, outcome=None):
-        if not isinstance(target, str) or ':' not in target or len(target) > 512:
+    def read(self, target=None, limit=50, before=None, source=None, outcome=None,
+             provider=None, start_at=None, end_at=None):
+        if target is not None and (not isinstance(target, str) or ':' not in target or len(target) > 512):
             raise ValueError('请选择有效模型')
-        if type(limit) is not int or not 1 <= limit <= 200:
-            raise ValueError('每页条数必须在 1 到 200 之间')
+        if provider is not None and (not isinstance(provider, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', provider)):
+            raise ValueError('请选择有效 provider')
+        if target is not None and provider is not None and target.split(':', 1)[0] != provider:
+            raise ValueError('模型与 provider 不匹配')
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise ValueError('每次查询上限为 50 条')
         if before is not None and (type(before) is not int or not 0 < before < 2**53):
             raise ValueError('日志游标无效，请刷新')
-        if source is not None and source not in SOURCES:
+        if source is not None and (not isinstance(source, str) or source not in SOURCES):
             raise ValueError('日志来源无效')
-        if outcome is not None and outcome not in OUTCOMES:
+        if outcome is not None and (not isinstance(outcome, str) or outcome not in OUTCOMES):
             raise ValueError('日志结果筛选无效')
-        result = {'target': target, 'entries': [], 'next_cursor': None, 'retention_limit': MAX_RECORDS,
-                  'available': self.path.is_file()}
+        for stamp in (start_at, end_at):
+            if stamp is not None and (type(stamp) not in (int, float) or not math.isfinite(stamp) or not 0 <= stamp <= 253402300799):
+                raise ValueError('时间范围无效')
+        if start_at is not None and end_at is not None and start_at > end_at:
+            raise ValueError('开始时间不能晚于结束时间')
+        result = {'target': target, 'provider': provider, 'entries': [], 'next_cursor': None,
+                  'retention_limit': MAX_RECORDS, 'available': self.path.is_file()}
         if not result['available']:
             return result
-        where = ['target = ?']; args = [target]
-        if before is not None:
-            where.append('id < ?'); args.append(before)
-        # source/outcome 不接入 SQL 字符串；所有外部值都使用参数绑定。
+        where = ['1 = 1']; args = []
+        if target is not None:
+            where.append('target = ?'); args.append(target)
+        elif provider is not None:
+            where.append("substr(target,1,instr(target,':')-1) = ?"); args.append(provider)
+        for clause, value in (('created_at >= ?', start_at), ('created_at <= ?', end_at)):
+            if value is not None:
+                where.append(clause); args.append(value)
         for key, value in (('source', source), ('outcome', outcome)):
             if value is not None:
                 where.append("json_extract(payload, '$.%s') = ?" % key); args.append(value)
-        sql = 'SELECT id,created_at,payload FROM calls WHERE ' + ' AND '.join(where) + ' ORDER BY id DESC LIMIT ?'
         with closing(sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, timeout=1)) as db:
+            if before is not None:
+                boundary = db.execute('SELECT created_at FROM calls WHERE id = ?', (before,)).fetchone()
+                if boundary is None:
+                    raise ValueError('旧日志已清理，请刷新最新记录')
+                where.append('(created_at < ? OR (created_at = ? AND id < ?))')
+                args.extend([boundary[0], boundary[0], before])
+            sql = 'SELECT id,created_at,target,payload FROM calls WHERE ' + ' AND '.join(where) + ' ORDER BY created_at DESC,id DESC LIMIT ?'
             rows = db.execute(sql, args + [limit + 1]).fetchall()
-        for ident, stamp, payload in rows[:limit]:
+        for ident, stamp, actual_target, payload in rows[:limit]:
             row = json.loads(payload)
-            row.update(id=ident, time=stamp, target=target)
+            row.update(id=ident, time=stamp, target=actual_target)
             row['reason'] = REASONS.get(row.get('code'))
             result['entries'].append(row)
         if len(rows) > limit:
