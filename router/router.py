@@ -10,12 +10,14 @@ import json
 import os
 import threading
 import time
+import uuid
 
 import yaml
 
 from core.paths import CONFIG_FILE, COOLDOWN_FILE
 from core.registry import configure_providers, get_provider
 from core.state import StateManager
+from core.model_logs import ModelCallLog, failure_code
 from core.quota import QuotaManager
 from core.capability import CapabilityManager
 from providers.base import ProviderError, response_has_output, usage_tokens
@@ -49,6 +51,7 @@ class AIRouter:
         configure_providers(providers_cfg)
 
         self.state = StateManager()
+        self.model_log = ModelCallLog()
         self.quota = QuotaManager()
         self.capability = CapabilityManager()
 
@@ -253,16 +256,44 @@ class AIRouter:
 
     # ---------- 调用 ----------
 
-    def _attempt(self, target, task_type, call):
+    def _log_context(self, mode, messages, params, streaming):
+        params = params or {}
+        return {"source": "business", "request_id": uuid.uuid4().hex,
+                "mode": mode, "stream": streaming, "input_messages": len(messages),
+                "input_chars": sum(len(m.get("content", "")) for m in messages
+                                   if isinstance(m, dict) and isinstance(m.get("content"), str)),
+                "tool_count": len(params.get("tools", [])) if isinstance(params.get("tools", []), list) else 0,
+                "max_tokens": params.get("max_completion_tokens", params.get("max_tokens"))}
+
+    def _log_attempt(self, target, context, outcome, start, error=None, code=None):
+        log = getattr(self, "model_log", None)
+        if log is None:
+            return
+        try:
+            fields = dict(context or {"source": "business"})
+            if outcome in ("success", "cancelled"):
+                fields.pop("next_target", None)
+            fields.update(outcome=outcome, duration=time.time() - start,
+                          code=code or (failure_code(error) if error else None),
+                          status=getattr(error, "status", None))
+            log.write(target, **fields)
+        except Exception:
+            # 日志不可写不应改变请求结果、统计或降级链。
+            pass
+
+    def _attempt(self, target, task_type, call, context=None):
         """在单个模型上执行 call，返回 (结果, 错误项)。"""
 
         provider_name, model = self.parse_target(target)
+        start = time.time()
 
         if self.state.is_disabled(target):
+            self._log_attempt(target, context, "skipped", start, code="disabled_pending_recovery")
             return None, {"model": target, "reason": "disabled_pending_recovery"}
 
         with self.quota.lock:
             if not self.quota.allowed(provider_name):
+                self._log_attempt(target, context, "skipped", start, code="quota_exceeded")
                 return None, {"provider": provider_name, "reason": "quota_exceeded"}
             self.quota.record(provider_name)
 
@@ -275,12 +306,13 @@ class AIRouter:
             if tokens:
                 self.quota.record_tokens_only(provider_name, tokens)
             if not response_has_output(result):
-                raise ProviderError("%s: 响应没有有效内容" % target, retryable=True)
+                raise ProviderError("%s: 响应没有有效内容" % target, retryable=True, code="empty_response")
 
             latency = round(time.time() - start, 3)
 
             self.state.record_success(target, latency, tokens=tokens)
             self.mark_success(target)
+            self._log_attempt(target, context, "success", start)
 
             return {
                 "success": True,
@@ -296,6 +328,7 @@ class AIRouter:
                 self.quota.record_tokens_only(provider_name, e.tokens)
             self.state.record_failure(target)
             self.mark_failure(target)
+            self._log_attempt(target, context, "failed", start, error=e)
 
             return None, {
                 "model": target,
@@ -306,6 +339,7 @@ class AIRouter:
         except Exception as e:
             self.state.record_failure(target)
             self.mark_failure(target)
+            self._log_attempt(target, context, "failed", start, error=e)
 
             return None, {
                 "model": target,
@@ -316,11 +350,14 @@ class AIRouter:
         routes = self.rank_routes(self.get_routes(mode, task_type), task_type or mode)
         errors = []
 
-        for target in routes:
+        context = self._log_context(task_type or mode, messages, params, False)
+        for index, target in enumerate(routes):
+            context["next_target"] = routes[index + 1] if index + 1 < len(routes) else None
             result, error = self._attempt(
                 target,
                 task_type,
                 lambda p, m: p.chat(m, messages, params=params),
+                context=context,
             )
 
             if result:
@@ -340,13 +377,18 @@ class AIRouter:
         routes = self.rank_routes(self.get_routes(mode, task_type), task_type or mode)
         errors = []
 
-        for target in routes:
+        context = self._log_context(task_type or mode, messages, params, True)
+        for index, target in enumerate(routes):
+            context["next_target"] = routes[index + 1] if index + 1 < len(routes) else None
+            start = time.time()
             provider_name, model = self.parse_target(target)
             if self.state.is_disabled(target):
+                self._log_attempt(target, context, "skipped", start, code="disabled_pending_recovery")
                 errors.append({"model": target, "reason": "disabled_pending_recovery"})
                 continue
             with self.quota.lock:
                 if not self.quota.allowed(provider_name):
+                    self._log_attempt(target, context, "skipped", start, code="quota_exceeded")
                     errors.append({"provider": provider_name, "reason": "quota_exceeded"})
                     continue
                 self.quota.record(provider_name)
@@ -367,10 +409,10 @@ class AIRouter:
                     if response_has_output(parsed, streaming=True):
                         break
                 else:
-                    raise ProviderError("%s: 流式响应没有有效内容" % target, retryable=True)
+                    raise ProviderError("%s: 流式响应没有有效内容" % target, retryable=True, code="empty_response")
 
                 if not buffered or not response_has_output(parsed, streaming=True):
-                    raise ProviderError("%s: 流式响应没有有效内容" % target, retryable=True)
+                    raise ProviderError("%s: 流式响应没有有效内容" % target, retryable=True, code="empty_response")
 
             except Exception as error:
                 self._close_stream(iterator)
@@ -378,6 +420,7 @@ class AIRouter:
                     self.quota.record_tokens_only(provider_name, tokens)
                 self.state.record_failure(target)
                 self.mark_failure(target)
+                self._log_attempt(target, context, "failed", start, error=error)
                 detail = {"model": target, "error": str(error)[:300]}
                 if isinstance(error, ProviderError):
                     detail["status"] = error.status
@@ -394,6 +437,8 @@ class AIRouter:
                 "errors": errors,
             }
 
+            context = dict(context, next_target=None)
+
             def generate():
                 nonlocal tokens
                 try:
@@ -407,13 +452,18 @@ class AIRouter:
                         parsed = self._parse_stream_chunk(chunk)
                         tokens = max(tokens, usage_tokens(parsed))
                         yield chunk
-                except Exception:
+                except GeneratorExit:
+                    self._log_attempt(target, context, "cancelled", start, code="client_closed")
+                    raise
+                except Exception as error:
+                    self._log_attempt(target, context, "failed", start, error=error)
                     self.state.record_failure(target)
                     self.mark_failure(target)
                     raise
                 else:
                     self.state.record_success(target, latency, tokens=tokens)
                     self.mark_success(target)
+                    self._log_attempt(target, context, "success", start)
                 finally:
                     self._close_stream(iterator)
                     if tokens:
@@ -430,9 +480,9 @@ class AIRouter:
         try:
             parsed = json.loads(chunk)
         except (ValueError, TypeError):
-            raise ProviderError("上游流式响应不是合法 JSON", retryable=True)
+            raise ProviderError("上游流式响应不是合法 JSON", retryable=True, code="invalid_json")
         if not isinstance(parsed, dict) or parsed.get("error"):
-            raise ProviderError("上游返回流式错误", retryable=True)
+            raise ProviderError("上游返回流式错误", retryable=True, code="stream_error")
         return parsed
 
     @staticmethod

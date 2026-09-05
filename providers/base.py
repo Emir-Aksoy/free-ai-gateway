@@ -22,11 +22,12 @@ class ProviderError(Exception):
     路由层据此决定是就地重试还是直接降级到下一个模型。
     """
 
-    def __init__(self, message, status=None, retryable=False, tokens=0):
+    def __init__(self, message, status=None, retryable=False, tokens=0, code=None):
         super().__init__(message)
         self.status = status
         self.retryable = retryable
         self.tokens = tokens
+        self.code = code
 
 
 def usage_tokens(payload):
@@ -224,6 +225,7 @@ class BaseProvider:
         raise ProviderError(
             "%s HTTP %d: %s" % (self.name, response.status_code, body),
             status=response.status_code,
+            code="http_error",
             retryable=response.status_code in RETRYABLE_STATUS,
         )
 
@@ -266,6 +268,7 @@ class BaseProvider:
                 last_error = ProviderError(
                     "%s 网络错误: %s" % (self.name, self._redact(str(e))[:200]),
                     retryable=True,
+                    code="timeout" if isinstance(e, requests.exceptions.Timeout) else "network_error",
                 )
 
                 if attempt >= self.max_retries:
@@ -288,12 +291,14 @@ class BaseProvider:
                     "%s: 响应没有有效内容" % self.name,
                     retryable=True,
                     tokens=usage_tokens(result),
+                    code="empty_response",
                 )
             return result
         except ValueError:
             raise ProviderError(
                 "%s: 响应不是合法 JSON: %s"
-                % (self.name, self._redact(response.text[:2048])[:200])
+                % (self.name, self._redact(response.text[:2048])[:200]),
+                code="invalid_json",
             )
         finally:
             response.close()
@@ -348,11 +353,12 @@ class BaseProvider:
             # 有些兼容端点只发 finish_reason 而没有 [DONE]，允许这种正常结束。
             # 没有任何完整结束标记的 EOF 可能是代理截断，不能补成成功。
             if len(finished_choices) < expected_choices:
-                raise ProviderError("%s: 流式响应在结束标记前中断" % self.name, retryable=True)
+                raise ProviderError("%s: 流式响应在结束标记前中断" % self.name, retryable=True, code="stream_incomplete")
         except requests.exceptions.RequestException as error:
             raise ProviderError(
                 "%s 流式网络错误: %s" % (self.name, self._redact(str(error))[:200]),
                 retryable=True,
+                code="timeout" if isinstance(error, requests.exceptions.Timeout) else "network_error",
             ) from None
         finally:
             response.close()

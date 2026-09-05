@@ -902,6 +902,20 @@ def cmd_models_list(params):
     return {"date": day, "models": out, "count": len(out)}
 
 
+def cmd_models_logs(params):
+    from core.model_logs import ModelCallLog
+    import sqlite3
+
+    try:
+        return ModelCallLog().read(params.get("target"), limit=params.get("limit", 50),
+                                   before=params.get("before"), source=params.get("source"),
+                                   outcome=params.get("outcome"))
+    except (ValueError, TypeError):
+        raise ManageError("日志查询参数无效，请刷新后重试", "invalid_input")
+    except (OSError, sqlite3.Error):
+        raise ManageError("暂时无法读取模型日志，请稍后重试", "logs_unavailable")
+
+
 def cmd_models_test(params):
     from core.paths import TEST_FILE
     from core.storage import atomic_write_json, read_json
@@ -922,6 +936,22 @@ def cmd_models_test(params):
         raise ManageError("配置里没有任何模型", "invalid_config")
 
     results = probe.test_targets(targets)
+    from core.model_logs import ModelCallLog
+    log = ModelCallLog()
+    reason_codes = {"未配置密钥": "missing_key", "超时": "timeout", "网络错误": "network_error",
+                    "空响应": "empty_response", "接口不兼容": "invalid_response",
+                    "超出时间预算": "budget_exceeded", "配置错误": "config_error"}
+    for result in results:
+        try:
+            code = None if result["ok"] else reason_codes.get(result.get("reason"),
+                         "http_error" if result.get("status") else "test_failed")
+            skipped = code in ("budget_exceeded", "config_error", "missing_key")
+            outcome = "success" if result["ok"] else "skipped" if skipped else "failed"
+            summary = {} if skipped else {"input_messages": 1, "input_chars": 2, "max_tokens": 256, "tool_count": 0}
+            log.write(result["target"], source="manual_test", outcome=outcome,
+                      duration=result.get("latency"), status=result.get("status"), code=code, stream=False, **summary)
+        except Exception:
+            pass
     payload = {
         "results": results,
         "summary": {"total": len(results), "ok": sum(1 for r in results if r["ok"])},
@@ -1921,6 +1951,7 @@ COMMANDS = {
     "status": cmd_status,
     "models list": cmd_models_list,
     "models test": cmd_models_test,
+    "models logs": cmd_models_logs,
     "models scan": cmd_models_scan,
     "config get": cmd_config_get,
     "config set": cmd_config_set,

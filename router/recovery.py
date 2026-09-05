@@ -4,6 +4,7 @@ import threading
 import time
 
 from core.registry import get_provider
+from core.model_logs import failure_code
 from providers.base import ProviderError, response_has_output, usage_tokens
 
 
@@ -75,6 +76,8 @@ class RecoveryWorker:
             self.router.quota.record(provider_name)
         success = False
         tokens = 0
+        start = time.time()
+        code, status = "empty_response", None
         try:
             # 探测独立超时与重试设置，不修改前台复用的 provider 实例。
             provider = copy.copy(get_provider(provider_name))
@@ -86,8 +89,9 @@ class RecoveryWorker:
             success = response_has_output(result)
         except ProviderError as error:
             tokens = error.tokens
+            code, status = failure_code(error), error.status
         except Exception:
-            pass
+            code = "upstream_error"
         finally:
             if tokens:
                 self.router.quota.record_tokens_only(provider_name, tokens)
@@ -99,5 +103,13 @@ class RecoveryWorker:
             if state.finish_recovery(target, token, success, time.time()):
                 if success:
                     self.router.mark_success(target)
+                log = getattr(self.router, "model_log", None)
+                if log is not None:
+                    try:
+                        log.write(target, source="recovery", outcome="success" if success else "failed",
+                                  duration=time.time() - start, code=None if success else code, status=status,
+                                  stream=False, input_messages=1, input_chars=17, max_tokens=256, tool_count=0)
+                    except Exception:
+                        pass
                 self._log({"event": "model_recovered" if success else "recovery_failed",
                            "target": target})
