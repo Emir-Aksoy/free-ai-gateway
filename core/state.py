@@ -1,20 +1,18 @@
-"""每个模型的当日调用统计。
+"""线程安全的每日业务统计，以及独立于日期的自动禁用/恢复状态。"""
 
-除了线程安全和原子写，还补上两件原先缺失的事：
-运行中跨天会自动滚动（原先只在启动时判断日期），
-以及 disabled 字段真正会被写入——原先没有任何代码把它设成 True，
-所以出现过某模型连续 11 次失败仍留在路由池里的情况。
-"""
-
+import copy
 import threading
+import time
+import uuid
 from datetime import datetime
 
 from core.paths import STATE_FILE
 from core.storage import ThrottledStore, read_json
 
-# 当日累计失败达到该次数、且成功率低于阈值时，当天不再路由到它。
+# 本轮累计失败达到阈值且当日成功率低时，暂停路由并等待后台恢复。
 DISABLE_AFTER_FAILURES = 8
 DISABLE_SUCCESS_RATE = 0.15
+RECOVERY_DELAYS = (900, 1800, 3600)
 
 
 def today():
@@ -31,11 +29,26 @@ class StateManager:
     def default_state(self):
         return {"date": today(), "models": {}}
 
+    def new_day_state(self, previous):
+        state = self.default_state()
+        for key, model in (previous or {}).get("models", {}).items():
+            if model.get("disabled"):
+                recovery = copy.deepcopy(model.get("recovery", {}))
+                # 新日统计不能被前一天仍在途的探测结果覆盖。
+                recovery.pop("token", None)
+                state["models"][key] = {
+                    "calls": 0, "success": 0, "failed": 0, "disabled": True,
+                    "latency_total": 0, "latency_avg": 0, "tokens": 0,
+                    "recovery": recovery,
+                }
+        self.store.maybe_flush(state, force=True)
+        return state
+
     def load(self):
         state = read_json(STATE_FILE)
 
         if not state or state.get("date") != today():
-            return self.default_state()
+            return self.new_day_state(state)
 
         state.setdefault("models", {})
         return state
@@ -44,8 +57,7 @@ class StateManager:
         """跨天则清空当日统计。调用方已持锁。"""
 
         if self.state.get("date") != today():
-            self.store.maybe_flush(self.state, force=True)
-            self.state = self.default_state()
+            self.state = self.new_day_state(self.state)
             return True
 
         return False
@@ -91,7 +103,10 @@ class StateManager:
                 model["tokens"] += tokens
 
             # 恢复了就解禁，免费额度按天重置，中途恢复是常事
+            if model["disabled"]:
+                model["failure_baseline"] = model["failed"]
             model["disabled"] = False
+            model.pop("recovery", None)
 
             self.store.mark_dirty()
             self.store.maybe_flush(self.state)
@@ -102,22 +117,60 @@ class StateManager:
 
             model["calls"] += 1
             model["failed"] += 1
+            newly_disabled = False
 
-            if model["failed"] >= DISABLE_AFTER_FAILURES:
+            if model["failed"] - model.get("failure_baseline", 0) >= DISABLE_AFTER_FAILURES:
                 rate = model["success"] / max(model["calls"], 1)
 
-                if rate < DISABLE_SUCCESS_RATE:
+                if rate < DISABLE_SUCCESS_RATE and not model["disabled"]:
                     model["disabled"] = True
+                    newly_disabled = True
+                    model["recovery"] = {"next_at": time.time() + RECOVERY_DELAYS[0], "attempts": 0}
 
             self.store.mark_dirty()
-            self.store.maybe_flush(self.state)
+            self.store.maybe_flush(self.state, force=newly_disabled)
+
+    def claim_recovery(self, key, now):
+        """预留一次探测并落盘；旧 disabled 状态立即可探测。"""
+        with self.lock:
+            model = self.get_model(key)
+            recovery = model.get("recovery", {})
+            if not model["disabled"] or recovery.get("next_at", 0) > now:
+                return None
+            token = uuid.uuid4().hex
+            recovery.update(token=token, next_at=now + RECOVERY_DELAYS[0])
+            model["recovery"] = recovery
+            self.store.mark_dirty()
+            self.flush()
+            return token
+
+    def finish_recovery(self, key, token, success, now):
+        """只接收当前禁用周期的结果；不将健康探测混入业务统计。"""
+        with self.lock:
+            model = self.get_model(key)
+            recovery = model.get("recovery", {})
+            if not model["disabled"] or recovery.get("token") != token:
+                return False
+            recovery.pop("token", None)
+            attempts = recovery.get("attempts", 0) + 1
+            recovery.update(attempts=attempts, last_at=now,
+                            last_result="recovered" if success else "failed")
+            if success:
+                model["disabled"] = False
+                model["failure_baseline"] = model["failed"]
+                recovery["next_at"] = None
+            else:
+                recovery["next_at"] = now + RECOVERY_DELAYS[min(attempts, len(RECOVERY_DELAYS) - 1)]
+            self.store.mark_dirty()
+            self.flush()
+            return True
 
     def snapshot(self):
         with self.lock:
             self.roll_if_needed()
             return {
                 "date": self.state.get("date"),
-                "models": dict(self.state.get("models", {})),
+                "models": copy.deepcopy(self.state.get("models", {})),
             }
 
     def flush(self):

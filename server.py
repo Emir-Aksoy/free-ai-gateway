@@ -19,6 +19,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from router.router import AIRouter
+from router.recovery import RecoveryWorker
 from core.apikey import APIKeyManager, key_id, mask_key
 from core.logger import GatewayLogger
 from providers.base import usage_tokens
@@ -433,6 +434,7 @@ def flush_all():
 
 def run():
     server = Gateway((LISTEN_HOST, LISTEN_PORT), GatewayHandler)
+    recovery = RecoveryWorker(router, logger)
 
     def shutdown(signum, frame):
         flush_all()
@@ -446,9 +448,11 @@ def run():
         flush=True,
     )
 
+    recovery.start()
     try:
         server.serve_forever()
     finally:
+        recovery.stop()
         flush_all()
         server.server_close()
 

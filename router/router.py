@@ -259,16 +259,17 @@ class AIRouter:
         provider_name, model = self.parse_target(target)
 
         if self.state.is_disabled(target):
-            return None, {"model": target, "reason": "disabled_today"}
+            return None, {"model": target, "reason": "disabled_pending_recovery"}
 
-        if not self.quota.allowed(provider_name):
-            return None, {"provider": provider_name, "reason": "quota_exceeded"}
+        with self.quota.lock:
+            if not self.quota.allowed(provider_name):
+                return None, {"provider": provider_name, "reason": "quota_exceeded"}
+            self.quota.record(provider_name)
 
         start = time.time()
 
         try:
             provider = get_provider(provider_name)
-            self.quota.record(provider_name)
             result = call(provider, model)
             tokens = usage_tokens(result)
             if tokens:
@@ -342,11 +343,13 @@ class AIRouter:
         for target in routes:
             provider_name, model = self.parse_target(target)
             if self.state.is_disabled(target):
-                errors.append({"model": target, "reason": "disabled_today"})
+                errors.append({"model": target, "reason": "disabled_pending_recovery"})
                 continue
-            if not self.quota.allowed(provider_name):
-                errors.append({"provider": provider_name, "reason": "quota_exceeded"})
-                continue
+            with self.quota.lock:
+                if not self.quota.allowed(provider_name):
+                    errors.append({"provider": provider_name, "reason": "quota_exceeded"})
+                    continue
+                self.quota.record(provider_name)
 
             start = time.time()
             iterator = None
@@ -354,7 +357,6 @@ class AIRouter:
             tokens = 0
             try:
                 provider = get_provider(provider_name)
-                self.quota.record(provider_name)
                 iterator = iter(provider.stream(model, messages, params=params))
                 for chunk in iterator:
                     if chunk == "[DONE]":

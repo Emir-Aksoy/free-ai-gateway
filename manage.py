@@ -890,6 +890,9 @@ def cmd_models_list(params):
                 "latency_avg": stats.get("latency_avg") if success else None,
                 "tokens": stats.get("tokens", 0),
                 "disabled": bool(stats.get("disabled")),
+                "recovery": ({field: stats["recovery"].get(field)
+                              for field in ("next_at", "last_at", "last_result", "attempts")}
+                             if "recovery" in stats else None),
                 "cooldown_left": cooldowns.get(target, {}).get("seconds_left", 0),
                 "capability": capability.get(target),
                 "provider_registered": provider in PROVIDERS,
