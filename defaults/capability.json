@@ -1,0 +1,141 @@
+{
+  "_comment": "各项0-100，初始估计供个人按体验调整；新安装复制到data/capability.json，升级不覆盖已保存评分。",
+  "models": {
+    "groq:openai/gpt-oss-120b": {
+      "agent": 90,
+      "thinking": 90,
+      "coding": 88,
+      "fast": 89,
+      "balanced": 89,
+      "writing": 89
+    },
+    "groq:openai/gpt-oss-20b": {
+      "agent": 78,
+      "thinking": 75,
+      "coding": 78,
+      "fast": 77,
+      "balanced": 77,
+      "writing": 77
+    },
+    "groq:qwen/qwen3.8-27b": {
+      "agent": 80,
+      "thinking": 78,
+      "coding": 80,
+      "fast": 79,
+      "balanced": 79,
+      "writing": 79
+    },
+    "groq:groq/compound": {
+      "agent": 85,
+      "thinking": 80,
+      "coding": 78,
+      "fast": 81,
+      "balanced": 81,
+      "writing": 81
+    },
+    "gemini:gemini-flash-latest": {
+      "agent": 88,
+      "thinking": 85,
+      "coding": 83,
+      "fast": 85,
+      "balanced": 85,
+      "writing": 85
+    },
+    "gemini:gemini-3.5-flash": {
+      "agent": 87,
+      "thinking": 86,
+      "coding": 84,
+      "fast": 86,
+      "balanced": 86,
+      "writing": 86
+    },
+    "gemini:gemini-3-flash-preview": {
+      "agent": 88,
+      "thinking": 85,
+      "coding": 82,
+      "fast": 85,
+      "balanced": 85,
+      "writing": 85
+    },
+    "agnes:agnes-2.0-flash": {
+      "agent": 82,
+      "thinking": 78,
+      "coding": 75,
+      "fast": 78,
+      "balanced": 78,
+      "writing": 78
+    },
+    "agnes:agnes-2.5-flash": {
+      "agent": 85,
+      "thinking": 82,
+      "coding": 80,
+      "fast": 82,
+      "balanced": 82,
+      "writing": 82
+    },
+    "agnes:agnes-2.5-pro": {
+      "agent": 90,
+      "thinking": 90,
+      "coding": 88,
+      "fast": 89,
+      "balanced": 89,
+      "writing": 89
+    },
+    "opencode:mimo-v2.5-free": {
+      "agent": 78,
+      "thinking": 76,
+      "coding": 80,
+      "fast": 78,
+      "balanced": 78,
+      "writing": 78
+    },
+    "opencode:nemotron-3-ultra-free": {
+      "agent": 88,
+      "thinking": 92,
+      "coding": 85,
+      "fast": 88,
+      "balanced": 88,
+      "writing": 88
+    },
+    "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free": {
+      "agent": 90,
+      "thinking": 93,
+      "coding": 87,
+      "fast": 90,
+      "balanced": 90,
+      "writing": 90
+    },
+    "openrouter:nvidia/nemotron-3.5-lightning:free": {
+      "agent": 85,
+      "thinking": 70,
+      "coding": 70,
+      "fast": 75,
+      "balanced": 75,
+      "writing": 75
+    },
+    "openrouter:minimax/minimax-m3:free": {
+      "agent": 84,
+      "thinking": 85,
+      "coding": 82,
+      "fast": 84,
+      "balanced": 84,
+      "writing": 84
+    },
+    "openrouter:google/gemma-4-31b-it:free": {
+      "agent": 75,
+      "thinking": 73,
+      "coding": 72,
+      "fast": 73,
+      "balanced": 73,
+      "writing": 73
+    },
+    "openrouter:auto": {
+      "agent": 80,
+      "thinking": 80,
+      "coding": 80,
+      "fast": 80,
+      "balanced": 80,
+      "writing": 80
+    }
+  }
+}

@@ -1,0 +1,839 @@
+{
+  "schema": 1,
+  "generated_at": "2026-09-04",
+  "gateway_modes": [
+    "agent",
+    "balanced",
+    "code",
+    "fast",
+    "thinking",
+    "writing"
+  ],
+  "weights": {
+    "说明": "capability × 0.7 + 成功率 × 0.2 + 速度 × 0.1；样本不足 10 次的模型，成功率与速度都按满分算，所以新模型容易插队",
+    "fast": "agent .35 / thinking .35 / coding .30",
+    "balanced": "agent .35 / thinking .35 / coding .30",
+    "thinking": "thinking .7 / agent .2 / coding .1",
+    "code": "coding .6 / thinking .3 / agent .1",
+    "agent": "agent .6 / thinking .3 / coding .1",
+    "writing": "agent .35 / thinking .35 / coding .30"
+  },
+  "providers": [
+    {
+      "id": "agnes",
+      "name": "Agnes AI",
+      "status": "in_use",
+      "base_url": "https://apihub.agnes-ai.com/v1",
+      "console": null,
+      "openai_compatible": true,
+      "gateway_quota": {
+        "rpm": 20,
+        "daily": 0
+      },
+      "free_policy": {
+        "quota": null,
+        "credit_card": null,
+        "region": null,
+        "trains_on_data": null,
+        "source": null,
+        "checked": null
+      },
+      "third_party": {
+        "throughput_tps": null,
+        "ttft_s": null,
+        "uptime": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "id": "gemini",
+      "name": "Google Gemini",
+      "status": "in_use",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "console": "https://aistudio.google.com",
+      "openai_compatible": true,
+      "gateway_quota": {
+        "rpm": 12,
+        "daily": 0
+      },
+      "free_policy": {
+        "quota": null,
+        "credit_card": null,
+        "region": null,
+        "trains_on_data": null,
+        "source": null,
+        "checked": null
+      },
+      "third_party": {
+        "throughput_tps": null,
+        "ttft_s": null,
+        "uptime": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "status": "in_use",
+      "base_url": "https://api.groq.com/openai/v1",
+      "console": "https://console.groq.com",
+      "openai_compatible": true,
+      "gateway_quota": {
+        "rpm": 25,
+        "daily": 0
+      },
+      "free_policy": {
+        "quota": null,
+        "credit_card": null,
+        "region": null,
+        "trains_on_data": null,
+        "source": null,
+        "checked": null
+      },
+      "third_party": {
+        "throughput_tps": null,
+        "ttft_s": null,
+        "uptime": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode Zen",
+      "status": "in_use",
+      "base_url": "https://opencode.ai/zen/v1",
+      "console": null,
+      "openai_compatible": true,
+      "gateway_quota": {
+        "rpm": 20,
+        "daily": 0
+      },
+      "free_policy": {
+        "quota": null,
+        "credit_card": null,
+        "region": null,
+        "trains_on_data": null,
+        "source": null,
+        "checked": null
+      },
+      "third_party": {
+        "throughput_tps": null,
+        "ttft_s": null,
+        "uptime": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "status": "in_use",
+      "base_url": "https://openrouter.ai/api/v1",
+      "console": "https://openrouter.ai/keys",
+      "openai_compatible": true,
+      "gateway_quota": {
+        "rpm": 15,
+        "daily": 0
+      },
+      "free_policy": {
+        "quota": null,
+        "credit_card": null,
+        "region": null,
+        "trains_on_data": null,
+        "source": null,
+        "checked": null
+      },
+      "third_party": {
+        "throughput_tps": null,
+        "ttft_s": null,
+        "uptime": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "id": "cerebras",
+      "name": "Cerebras",
+      "status": "candidate",
+      "base_url": "https://api.cerebras.ai/v1",
+      "console": "https://cloud.cerebras.ai",
+      "openai_compatible": null,
+      "gateway_quota": {
+        "rpm": null,
+        "daily": null
+      },
+      "free_policy": {
+        "quota": null,
+        "credit_card": null,
+        "region": null,
+        "trains_on_data": null,
+        "source": null,
+        "checked": null
+      },
+      "third_party": {
+        "throughput_tps": null,
+        "ttft_s": null,
+        "uptime": null,
+        "source": null,
+        "checked": null
+      },
+      "note": "线索，未经本项目验证：接口地址、是否 OpenAI 兼容、免费条件都要先核实"
+    },
+    {
+      "id": "mistral",
+      "name": "Mistral La Plateforme",
+      "status": "candidate",
+      "base_url": "https://api.mistral.ai/v1",
+      "console": "https://console.mistral.ai",
+      "openai_compatible": null,
+      "gateway_quota": {
+        "rpm": null,
+        "daily": null
+      },
+      "free_policy": {
+        "quota": null,
+        "credit_card": null,
+        "region": null,
+        "trains_on_data": null,
+        "source": null,
+        "checked": null
+      },
+      "third_party": {
+        "throughput_tps": null,
+        "ttft_s": null,
+        "uptime": null,
+        "source": null,
+        "checked": null
+      },
+      "note": "线索，未经本项目验证：接口地址、是否 OpenAI 兼容、免费条件都要先核实"
+    },
+    {
+      "id": "githubmodels",
+      "name": "GitHub Models",
+      "status": "candidate",
+      "base_url": "https://models.github.ai/inference",
+      "console": "https://github.com/marketplace/models",
+      "openai_compatible": null,
+      "gateway_quota": {
+        "rpm": null,
+        "daily": null
+      },
+      "free_policy": {
+        "quota": null,
+        "credit_card": null,
+        "region": null,
+        "trains_on_data": null,
+        "source": null,
+        "checked": null
+      },
+      "third_party": {
+        "throughput_tps": null,
+        "ttft_s": null,
+        "uptime": null,
+        "source": null,
+        "checked": null
+      },
+      "note": "线索，未经本项目验证：接口地址、是否 OpenAI 兼容、免费条件都要先核实"
+    },
+    {
+      "id": "cloudflare",
+      "name": "Cloudflare Workers AI",
+      "status": "candidate",
+      "base_url": "https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1",
+      "console": "https://dash.cloudflare.com",
+      "openai_compatible": null,
+      "gateway_quota": {
+        "rpm": null,
+        "daily": null
+      },
+      "free_policy": {
+        "quota": null,
+        "credit_card": null,
+        "region": null,
+        "trains_on_data": null,
+        "source": null,
+        "checked": null
+      },
+      "third_party": {
+        "throughput_tps": null,
+        "ttft_s": null,
+        "uptime": null,
+        "source": null,
+        "checked": null
+      },
+      "note": "线索，未经本项目验证：接口地址、是否 OpenAI 兼容、免费条件都要先核实"
+    },
+    {
+      "id": "nvidia",
+      "name": "NVIDIA NIM",
+      "status": "candidate",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "console": "https://build.nvidia.com",
+      "openai_compatible": null,
+      "gateway_quota": {
+        "rpm": null,
+        "daily": null
+      },
+      "free_policy": {
+        "quota": null,
+        "credit_card": null,
+        "region": null,
+        "trains_on_data": null,
+        "source": null,
+        "checked": null
+      },
+      "third_party": {
+        "throughput_tps": null,
+        "ttft_s": null,
+        "uptime": null,
+        "source": null,
+        "checked": null
+      },
+      "note": "线索，未经本项目验证：接口地址、是否 OpenAI 兼容、免费条件都要先核实"
+    },
+    {
+      "id": "hfrouter",
+      "name": "Hugging Face Router",
+      "status": "candidate",
+      "base_url": "https://router.huggingface.co/v1",
+      "console": "https://huggingface.co/settings/tokens",
+      "openai_compatible": null,
+      "gateway_quota": {
+        "rpm": null,
+        "daily": null
+      },
+      "free_policy": {
+        "quota": null,
+        "credit_card": null,
+        "region": null,
+        "trains_on_data": null,
+        "source": null,
+        "checked": null
+      },
+      "third_party": {
+        "throughput_tps": null,
+        "ttft_s": null,
+        "uptime": null,
+        "source": null,
+        "checked": null
+      },
+      "note": "线索，未经本项目验证：接口地址、是否 OpenAI 兼容、免费条件都要先核实"
+    },
+    {
+      "id": "sambanova",
+      "name": "SambaNova",
+      "status": "candidate",
+      "base_url": "https://api.sambanova.ai/v1",
+      "console": "https://cloud.sambanova.ai",
+      "openai_compatible": null,
+      "gateway_quota": {
+        "rpm": null,
+        "daily": null
+      },
+      "free_policy": {
+        "quota": null,
+        "credit_card": null,
+        "region": null,
+        "trains_on_data": null,
+        "source": null,
+        "checked": null
+      },
+      "third_party": {
+        "throughput_tps": null,
+        "ttft_s": null,
+        "uptime": null,
+        "source": null,
+        "checked": null
+      },
+      "note": "线索，未经本项目验证：接口地址、是否 OpenAI 兼容、免费条件都要先核实"
+    },
+    {
+      "id": "siliconflow",
+      "name": "SiliconFlow 硅基流动",
+      "status": "candidate",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "console": "https://cloud.siliconflow.cn",
+      "openai_compatible": null,
+      "gateway_quota": {
+        "rpm": null,
+        "daily": null
+      },
+      "free_policy": {
+        "quota": null,
+        "credit_card": null,
+        "region": null,
+        "trains_on_data": null,
+        "source": null,
+        "checked": null
+      },
+      "third_party": {
+        "throughput_tps": null,
+        "ttft_s": null,
+        "uptime": null,
+        "source": null,
+        "checked": null
+      },
+      "note": "线索，未经本项目验证：接口地址、是否 OpenAI 兼容、免费条件都要先核实"
+    },
+    {
+      "id": "zhipu",
+      "name": "智谱 GLM",
+      "status": "candidate",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "console": "https://open.bigmodel.cn",
+      "openai_compatible": null,
+      "gateway_quota": {
+        "rpm": null,
+        "daily": null
+      },
+      "free_policy": {
+        "quota": null,
+        "credit_card": null,
+        "region": null,
+        "trains_on_data": null,
+        "source": null,
+        "checked": null
+      },
+      "third_party": {
+        "throughput_tps": null,
+        "ttft_s": null,
+        "uptime": null,
+        "source": null,
+        "checked": null
+      },
+      "note": "线索，未经本项目验证：接口地址、是否 OpenAI 兼容、免费条件都要先核实"
+    }
+  ],
+  "models": [
+    {
+      "target": "agnes:agnes-2.0-flash",
+      "provider": "agnes",
+      "model": "agnes-2.0-flash",
+      "in_chains": [
+        "balanced",
+        "fast"
+      ],
+      "capability": {
+        "agent": 82,
+        "thinking": 78,
+        "coding": 75,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "agnes:agnes-2.5-flash",
+      "provider": "agnes",
+      "model": "agnes-2.5-flash",
+      "in_chains": [
+        "balanced",
+        "writing"
+      ],
+      "capability": {
+        "agent": 85,
+        "thinking": 82,
+        "coding": 80,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "agnes:agnes-2.5-pro",
+      "provider": "agnes",
+      "model": "agnes-2.5-pro",
+      "in_chains": [
+        "agent",
+        "code",
+        "thinking",
+        "writing"
+      ],
+      "capability": {
+        "agent": 90,
+        "thinking": 90,
+        "coding": 88,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "gemini:gemini-3-flash-preview",
+      "provider": "gemini",
+      "model": "gemini-3-flash-preview",
+      "in_chains": [],
+      "capability": {
+        "agent": 88,
+        "thinking": 85,
+        "coding": 82,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "gemini:gemini-3.5-flash",
+      "provider": "gemini",
+      "model": "gemini-3.5-flash",
+      "in_chains": [
+        "code",
+        "thinking",
+        "writing"
+      ],
+      "capability": {
+        "agent": 87,
+        "thinking": 86,
+        "coding": 84,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "gemini:gemini-flash-latest",
+      "provider": "gemini",
+      "model": "gemini-flash-latest",
+      "in_chains": [
+        "agent",
+        "balanced",
+        "fast",
+        "writing"
+      ],
+      "capability": {
+        "agent": 88,
+        "thinking": 85,
+        "coding": 83,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "groq:groq/compound",
+      "provider": "groq",
+      "model": "groq/compound",
+      "in_chains": [
+        "agent",
+        "fast"
+      ],
+      "capability": {
+        "agent": 85,
+        "thinking": 80,
+        "coding": 78,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "groq:openai/gpt-oss-120b",
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b",
+      "in_chains": [
+        "agent",
+        "balanced",
+        "code",
+        "writing"
+      ],
+      "capability": {
+        "agent": 90,
+        "thinking": 90,
+        "coding": 88,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "groq:openai/gpt-oss-20b",
+      "provider": "groq",
+      "model": "openai/gpt-oss-20b",
+      "in_chains": [
+        "fast"
+      ],
+      "capability": {
+        "agent": 78,
+        "thinking": 75,
+        "coding": 78,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "groq:qwen/qwen3.8-27b",
+      "provider": "groq",
+      "model": "qwen/qwen3.8-27b",
+      "in_chains": [
+        "fast"
+      ],
+      "capability": {
+        "agent": 80,
+        "thinking": 78,
+        "coding": 80,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "opencode:mimo-v2.5-free",
+      "provider": "opencode",
+      "model": "mimo-v2.5-free",
+      "in_chains": [
+        "code"
+      ],
+      "capability": {
+        "agent": 78,
+        "thinking": 76,
+        "coding": 80,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "opencode:nemotron-3-ultra-free",
+      "provider": "opencode",
+      "model": "nemotron-3-ultra-free",
+      "in_chains": [],
+      "capability": {
+        "agent": 88,
+        "thinking": 92,
+        "coding": 85,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "openrouter:auto",
+      "provider": "openrouter",
+      "model": "auto",
+      "in_chains": [],
+      "capability": {
+        "agent": 80,
+        "thinking": 80,
+        "coding": 80,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "openrouter:google/gemma-4-31b-it:free",
+      "provider": "openrouter",
+      "model": "google/gemma-4-31b-it:free",
+      "in_chains": [],
+      "capability": {
+        "agent": 75,
+        "thinking": 73,
+        "coding": 72,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "openrouter:minimax/minimax-m3:free",
+      "provider": "openrouter",
+      "model": "minimax/minimax-m3:free",
+      "in_chains": [
+        "thinking"
+      ],
+      "capability": {
+        "agent": 84,
+        "thinking": 85,
+        "coding": 82,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "openrouter:nvidia/nemotron-3-ultra-550b-a55b:free",
+      "provider": "openrouter",
+      "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "in_chains": [
+        "agent",
+        "balanced",
+        "code",
+        "thinking"
+      ],
+      "capability": {
+        "agent": 90,
+        "thinking": 93,
+        "coding": 87,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    },
+    {
+      "target": "openrouter:nvidia/nemotron-3.5-lightning:free",
+      "provider": "openrouter",
+      "model": "nvidia/nemotron-3.5-lightning:free",
+      "in_chains": [
+        "thinking"
+      ],
+      "capability": {
+        "agent": 85,
+        "thinking": 70,
+        "coding": 70,
+        "source": "本项目估计"
+      },
+      "third_party": {
+        "arena_elo": null,
+        "aa_index": null,
+        "coding_bench": null,
+        "source": null,
+        "checked": null
+      }
+    }
+  ],
+  "sources": [
+    {
+      "name": "LMArena",
+      "url": "https://lmarena.ai/leaderboard",
+      "covers": "人类盲测 Elo，综合能力",
+      "verified": false
+    },
+    {
+      "name": "Artificial Analysis",
+      "url": "https://artificialanalysis.ai",
+      "covers": "各 provider 的吞吐(TPS)、首字延迟(TTFT)、价格与质量指数",
+      "verified": false
+    },
+    {
+      "name": "OpenRouter Rankings",
+      "url": "https://openrouter.ai/rankings",
+      "covers": "真实用量排名；provider 页有 uptime 与延迟",
+      "verified": false
+    },
+    {
+      "name": "LiveBench",
+      "url": "https://livebench.ai",
+      "covers": "防污染的分维度基准（推理/编码/数学等）",
+      "verified": false
+    },
+    {
+      "name": "Aider Polyglot Leaderboard",
+      "url": "https://aider.chat/docs/leaderboards/",
+      "covers": "多语言实际改码能力",
+      "verified": false
+    },
+    {
+      "name": "SWE-bench",
+      "url": "https://www.swebench.com",
+      "covers": "真实 GitHub issue 修复率",
+      "verified": false
+    },
+    {
+      "name": "Open LLM Leaderboard",
+      "url": "https://huggingface.co/spaces/open-llm-leaderboard/open_llm_leaderboard",
+      "covers": "开源模型学术基准",
+      "verified": false
+    }
+  ],
+  "excluded": [
+    {
+      "target": "opencode:deepseek-v4-flash-free",
+      "reason": "上游持续 HTTP 400，实测 11/11 全失败",
+      "date": "2026-09-03"
+    },
+    {
+      "target": "gemini:gemini-3-flash-preview",
+      "reason": "高峰期 503 且要挂住 53 秒才失败，改用 gemini-flash-latest 别名",
+      "date": "2026-09-03"
+    },
+    {
+      "target": "openrouter:auto",
+      "reason": "会路由到非 :free 模型，可能消耗付费余额",
+      "date": "2026-09-03"
+    }
+  ]
+}
