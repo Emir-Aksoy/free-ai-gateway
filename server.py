@@ -204,9 +204,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return json.loads(raw.decode("utf-8"))
 
     def _route_post(self):
+        # One handler can serve multiple requests on a keep-alive connection.
+        for field in ("_responses_custom", "_responses_model"):
+            if hasattr(self, field): delattr(self, field)
         path = self.path.split("?", 1)[0]
 
-        if path != "/v1/chat/completions":
+        if path not in ("/v1/chat/completions", "/v1/responses"):
             self._error("Not found", 404, "not_found")
             return
 
@@ -221,6 +224,18 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._error("Invalid JSON body: %s" % e, 400, "invalid_body")
             return
 
+        if path == "/v1/responses":
+            from core.responses import to_chat_request
+            try:
+                request, custom = to_chat_request(body)
+            except ValueError as error:
+                self._error(str(error), 400, "unsupported_responses_request")
+                return
+            self._responses_custom = custom
+            self._responses_model = request["model"]
+            original_body, body = body, request
+        else:
+            original_body = body
         messages = body.get("messages")
 
         if not isinstance(messages, list) or not messages:
@@ -242,13 +257,17 @@ class GatewayHandler(BaseHTTPRequestHandler):
         }
 
         if body.get("stream"):
-            self._handle_stream(api_key, mode, messages, task_type, params, request_body=body)
+            self._handle_stream(api_key, mode, messages, task_type, params, request_body=original_body)
         else:
-            self._handle_chat(api_key, mode, messages, task_type, params, request_body=body)
+            self._handle_chat(api_key, mode, messages, task_type, params, request_body=original_body)
 
     def _handle_chat(self, api_key, mode, messages, task_type, params, request_body=None):
+        options = {}
+        if hasattr(self, "_responses_custom"):
+            from core.responses import from_chat
+            options["response_validator"] = lambda payload: from_chat(payload, self._responses_model, self._responses_custom)
         result = router.chat(
-            mode=mode, messages=messages, task_type=task_type, params=params, request_body=request_body
+            mode=mode, messages=messages, task_type=task_type, params=params, request_body=request_body, **options
         )
 
         key_manager.record(api_key)
@@ -276,6 +295,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
         payload = result.get("result") or {}
         tokens = usage_tokens(payload)
 
+        if hasattr(self, "_responses_custom"):
+            from core.responses import from_chat
+            try:
+                payload = from_chat(payload, self._responses_model, self._responses_custom)
+            except ValueError:
+                self._error("Upstream response is incompatible with Responses API", 502, "invalid_response")
+                return
         logger.access(
             {
                 "event": "request_success",
@@ -292,8 +318,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self._json(payload)
 
     def _handle_stream(self, api_key, mode, messages, task_type, params, request_body=None):
+        adapter = None
+        options = {}
+        if hasattr(self, "_responses_custom"):
+            from core.responses import ResponseStream
+            adapter = ResponseStream(self._responses_model, self._responses_custom)
+            options["response_adapter"] = adapter
         meta, chunks = router.stream(
-            mode=mode, messages=messages, task_type=task_type, params=params, request_body=request_body
+            mode=mode, messages=messages, task_type=task_type, params=params, request_body=request_body, **options
         )
 
         key_manager.record(api_key)
@@ -331,8 +363,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
         sent = 0
         tokens = 0
+        def send_event(event):
+            self._write_chunked(("event: %s\ndata: %s\n\n" % (event["type"], json.dumps(event, ensure_ascii=False))).encode("utf-8"))
 
         try:
+            if adapter:
+                for event in adapter.start_events(): send_event(event)
             for chunk in chunks:
                 try:
                     parsed = json.loads(chunk)
@@ -340,10 +376,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 except ValueError:
                     pass
 
-                self._write_chunked(("data: %s\n\n" % chunk).encode("utf-8"))
+                if adapter:
+                    send_event(json.loads(chunk))
+                else:
+                    self._write_chunked(("data: %s\n\n" % chunk).encode("utf-8"))
                 sent += 1
 
-            self._write_chunked(b"data: [DONE]\n\n")
+            if not adapter:
+                self._write_chunked(b"data: [DONE]\n\n")
             self._end_chunked()
 
         except (BrokenPipeError, ConnectionResetError):
@@ -364,24 +404,19 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
 
         except Exception:
-            # 已经开始输出，无法再改状态码，只能以错误事件收尾。
-            # 原始异常可能含上游请求头，HTTP 边界只发送固定错误说明。
-            # 收尾同样要走 chunked，并补上结束块，否则客户端会一直等下去。
+            logger.access({"event": "request_failed", "key": mask_key(api_key), "key_id": key_id(api_key),
+                           "provider": meta.get("provider"), "model": meta.get("model"),
+                           "stream": True, "success": False, "code": "upstream_stream_error"})
             try:
-                self._write_chunked(
-                    (
-                        "data: %s\n\n"
-                        % json.dumps(
-                            {"error": {"message": "上游流式响应中断", "code": "upstream_stream_error"}},
-                            ensure_ascii=False,
-                        )
-                    ).encode("utf-8")
-                )
-                self._write_chunked(b"data: [DONE]\n\n")
+                if adapter:
+                    adapter.response["status"] = "failed"
+                    adapter.response["error"] = {"code": "upstream_stream_error", "message": "Upstream stream failed"}
+                    send_event(adapter.event("response.failed", response=adapter.response))
+                else:
+                    self._write_chunked(b'data: {"error":{"message":"Upstream stream failed","code":"upstream_stream_error"}}\n\ndata: [DONE]\n\n')
                 self._end_chunked()
             except Exception:
-                pass
-
+                self.close_connection = True
             return
 
         finally:
@@ -397,6 +432,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
+        if adapter and adapter.response.get("usage"):
+            tokens = adapter.response["usage"].get("total_tokens", tokens)
         logger.access(
             {
                 "event": "request_success",
@@ -420,6 +457,43 @@ class Gateway(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
     request_queue_size = 64
+
+    def __init__(self, *args, **kwargs):
+        maximum = int(os.environ.get("GATEWAY_MAX_CONNECTIONS", "0"))
+        timeout = float(os.environ.get("GATEWAY_IDLE_TIMEOUT", "0"))
+        self.connection_slots = threading.BoundedSemaphore(maximum) if maximum > 0 else None
+        self.idle_timeout = timeout if timeout > 0 else None
+        super().__init__(*args, **kwargs)
+
+    def get_request(self):
+        request, address = super().get_request()
+        if self.idle_timeout is not None:
+            request.settimeout(self.idle_timeout)
+        return request, address
+
+    def process_request(self, request, client_address):
+        if self.connection_slots is not None and not self.connection_slots.acquire(blocking=False):
+            try:
+                request.settimeout(1)
+                request.sendall(b'HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nRetry-After: 1\r\nContent-Length: 0\r\n\r\n')
+            except OSError:
+                pass
+            finally:
+                self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            if self.connection_slots is not None:
+                self.connection_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            if self.connection_slots is not None:
+                self.connection_slots.release()
 
 
 def flush_all():

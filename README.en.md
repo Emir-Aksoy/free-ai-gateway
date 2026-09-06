@@ -4,6 +4,18 @@ English · [简体中文](README.md)
 
 A personal, self-hosted gateway for using your own model API accounts. The project currently focuses on aggregating **free API access** behind one OpenAI-compatible `/v1` endpoint. It does not provide public API keys or guarantee upstream availability or free pricing.
 
+## v1.1: Mac local mode and agents
+
+Choose Mac local or VPS in the App connection page. Initialize the local instance, save its one-time client key, start the gateway, then add your Providers and configure the `agent` or `code` route. Existing VPS settings and credentials remain separate and are never copied automatically.
+
+The App includes the runtime: no separate Python, Docker, database daemon or local model inference. The default endpoint is `http://127.0.0.1:8090/v1`, restricted to loopback. A started gateway continues after quitting the App; stop it explicitly in the App. It does not start automatically after login. Local mode allows 8 HTTP connections and closes idle connections after 30 seconds. The Mac runtime adds no VPS dependencies.
+
+OpenClaw custom Providers use `api: "openai-completions"`. Codex custom Providers use `wire_api = "responses"`, the same `/v1` base URL, an environment variable containing your gateway key, and `supports_websockets = false`. Select a task alias such as `agent`; disable hosted web search.
+
+Responses supports full-history stateless requests, instructions, function tools, namespaced tools, text custom tools, streaming, usage and incomplete output. Use `store: false`. Server-side storage, previous response IDs, background jobs, hosted tools, cloud compaction, WebSockets, encrypted reasoning state and grammar custom tools are not supported. Anthropic Messages for Claude Code is outside this release's scope.
+
+Actual OpenClaw 2026.9.1 and Codex CLI 0.144.6 completed isolated write-file, read-file, tool-result and final-answer flows. This verifies protocol behavior, not upstream model quality. Tool support and context limits depend on your chosen model.
+
 ## Download and install
 
 Download the Apple Silicon macOS App and gateway archive from [GitHub Releases](https://github.com/Emir-Aksoy/free-ai-gateway/releases/latest). Release assets include a DMG, App ZIP, gateway tar.gz and SHA256 checksums. The App currently has no Apple Developer ID signature/notarization. Verify its source and checksum before allowing it in macOS Privacy & Security.

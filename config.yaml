@@ -1,18 +1,5 @@
-# ai-gateway 配置。
-#
-# gateway.modes（降级链）与 data/capability.json（能力评分）由 manage.py / 桌面管理工具维护，
-# 保存时 gateway 段会被整体重写，写在该段内的注释会丢失；文件顶部与其余各段保持原样。
-#
-# 历史备注（2026-09-03 按实测结果重排降级链时记录）：
-#   已移除 opencode:deepseek-v4-flash-free —— 上游持续 HTTP 400，实测 11/11 全失败
-#   已移除 gemini:gemini-3-flash-preview   —— 高峰期 503 且要挂住 53 秒才失败，
-#                                            改用 gemini-flash-latest 别名，由上游跟进版本
-#   openrouter:auto 未纳入：实测会路由到 deepseek-v4-flash-0731 这类非 :free 模型，
-#   可能消耗付费余额，确认计费方式后再决定是否启用。
-
+# Personal API gateway configuration. Edit with the App.
 gateway:
-  # 本段由 manage.py / 桌面管理工具维护（最近写入 2026-09-03 14:20:52）。
-  # 手写在本段里的注释会在下次保存时丢失；其余各段保持原样。
   name: free-ai-gateway
   timezone: America/Los_Angeles
   routing:
@@ -83,9 +70,6 @@ limits:
   logs:
     keep_days: 30
 
-# 主动避让优于撞 429。rpm 为每分钟请求数上限（滑动窗口），
-# daily 为当日调用次数上限，0 表示不限。
-# 这里的 rpm 取各家免费层常见值的保守估计，撞限流时可下调。
 quota:
   groq:
     rpm: 25

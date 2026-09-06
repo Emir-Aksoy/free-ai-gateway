@@ -2,7 +2,36 @@
 
 [English](README.en.md) · 简体中文
 
-为个人使用各种模型 API 建立的 OpenAI 兼容聚合网关，目前主打**免费 API 的聚合调用**。使用自己的 VPS 和 Provider 账号，把不同服务商统一到一个 `/v1` 地址。
+为个人使用各种模型 API 建立的 OpenAI 兼容聚合网关，目前主打**免费 API 的聚合调用**。使用自己的 Mac 本机或 VPS 和 Provider 账号，把不同服务商统一到一个 `/v1` 地址。
+
+## v1.1：Mac 本机与 Agent
+
+App 可在「连接」中切换 Mac 本机 / VPS。首次使用本机模式，初始化并保存首次显示的客户端密钥，启动网关，再添加 Provider、测试模型并配置 `agent` 或 `code` 调用链。原有 VPS 连接、配置和密钥独立保留，不会自动复制到本机。
+
+本机组件随 App 提供，不需要另装 Python、Docker 或数据库服务。它只转发 API，不在 Mac 上加载模型；默认地址为 `http://127.0.0.1:8090/v1`，仅限本机访问。启动后可退出 App；在 App 中点击停止会关闭网关。重启或重新登录后需再次手动启动。默认最多 8 个 HTTP 连接，空闲连接 30 秒关闭，日志沿用有上限的本地存储。VPS 不安装 Mac 运行组件，也不新增依赖。
+
+- **OpenClaw**：自定义 Provider 使用 `api: "openai-completions"`，Base URL 填本机地址，model 选择网关任务别名 `agent`。支持流式回复及客户端工具的多轮调用。
+- **Codex**：自定义 Provider 使用 `wire_api = "responses"`，通过 `/v1/responses` 接入。支持完整历史、指令、普通函数工具、命名空间工具、文本自定义工具、SSE 和用量统计。工具实际执行仍由 Codex 负责。
+- **兼容边界**：无服务端会话保存；使用 `store: false` 并发送完整历史。暂不支持 `previous_response_id`、后台任务、托管搜索、Responses 云端压缩、WebSocket、加密 reasoning 状态和自定义 grammar 工具，这些能力不会被伪装成成功。Claude Code 的 Anthropic Messages 接口暂不在支持范围内。
+
+真实 OpenClaw 2026.9.1 和 Codex CLI 0.144.6 已通过隔离上游的写文件、读文件、工具结果回传和最终回复验证。这验证的是协议和工具流程；实际完成任务的质量、上下文长度及工具能力仍取决于你配置的上游模型。
+
+Codex 配置示例（客户端密钥通过环境变量提供，保持自己的沙箱及审批设置）：
+
+```toml
+model = "agent"
+model_provider = "personal_gateway"
+web_search = "disabled"
+
+[model_providers.personal_gateway]
+name = "Personal Gateway"
+base_url = "http://127.0.0.1:8090/v1"
+env_key = "PERSONAL_GATEWAY_KEY"
+wire_api = "responses"
+supports_websockets = false
+```
+
+选择的上游模型必须支持工具调用。网关任务别名不会改变模型本身的能力或上下文上限。客户端发出的压缩、搜索或特殊工具请求如被拒绝，请关闭对应客户端能力；普通函数工具不受影响。
 
 ## v1.0
 
@@ -47,7 +76,7 @@ VPS 需 root、Python 3，以及 apt / systemd 兼容的 Linux 环境。
 
 ## 新增 Provider 与免费模型
 
-在「Provider」页新增服务商，填写名称、OpenAI 兼容 Base URL、密钥环境变量名和密钥。密钥经 SSH 写到自己的 VPS。
+在「Provider」页新增服务商，填写名称、OpenAI 兼容 Base URL、密钥环境变量名和密钥。VPS 模式经 SSH 写入服务器；本机模式写入 App 私有实例目录。
 
 在「扫描」页查询模型目录：查询只请求 `/models`，不发送生成请求。App 根据零价格元数据、已知免费模型标识或你明确登记的免费名单判断；任何非零价格证据优先于名单。计费未知时，先根据自己的账号套餐确认免费范围，再登记和测试。
 

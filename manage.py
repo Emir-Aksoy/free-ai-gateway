@@ -1121,7 +1121,7 @@ def validate_target(target, providers):
     return None
 
 
-def validate_config(modes, capability):
+def validate_config(modes, capability, allow_empty=False):
     from core.registry import PROVIDERS
 
     errors = []
@@ -1159,7 +1159,7 @@ def validate_config(modes, capability):
             errors.append("模式名 %r 不合法（小写字母开头，只能含字母数字 _ -）" % label)
             continue
 
-        if not isinstance(chain, list) or not chain:
+        if not isinstance(chain, list) or (not chain and not allow_empty):
             errors.append("降级链 %s 为空" % label)
             continue
 
@@ -1365,6 +1365,17 @@ def cmd_config_get(params):
     }
 
 
+def validate_router_config():
+    """Load the saved configuration in a clean process; desktop runtimes may supply a fixed validator."""
+    from core.paths import BASE_DIR
+    return sh(
+        [sys.executable, "-B", "-c", "from router.router import AIRouter; AIRouter()"],
+        timeout=60,
+        cwd=BASE_DIR,
+        env=dict(os.environ, GATEWAY_DIR=BASE_DIR, PYTHONPATH=BASE_DIR),
+    )
+
+
 def cmd_config_set(params):
     import yaml
     from core.paths import BASE_DIR, CAPABILITY_FILE, CONFIG_FILE, LOG_DIR
@@ -1450,12 +1461,7 @@ def cmd_config_set(params):
             raise ManageError("写入 capability.json 失败", "write_failed")
 
         # 让一个干净的解释器把新配置完整加载一遍，比只做结构校验更接近真实启动
-        rc, out, err = sh(
-            [sys.executable, "-B", "-c", "from router.router import AIRouter; AIRouter()"],
-            timeout=60,
-            cwd=BASE_DIR,
-            env=dict(os.environ, GATEWAY_DIR=BASE_DIR, PYTHONPATH=BASE_DIR),
-        )
+        rc, out, err = validate_router_config()
 
         if rc != 0:
             raise ManageError(

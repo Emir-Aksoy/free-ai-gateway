@@ -378,7 +378,7 @@ class AIRouter:
             # 日志不可写不应改变请求结果、统计或降级链。
             pass
 
-    def _attempt(self, target, task_type, call, context=None):
+    def _attempt(self, target, task_type, call, context=None, response_validator=None):
         """在单个模型上执行 call，返回 (结果, 错误项)。"""
 
         provider_name, model = self.parse_target(target)
@@ -413,6 +413,9 @@ class AIRouter:
                 self.quota.record_tokens_only(provider_name, tokens)
             if not response_has_output(result):
                 raise ProviderError("%s: 响应没有有效内容" % target, retryable=True, code="empty_response")
+
+            if response_validator is not None:
+                response_validator(result)
 
             latency = round(time.time() - start, 3)
 
@@ -451,7 +454,7 @@ class AIRouter:
                 "error": "%s: %s" % (type(e).__name__, str(e)[:200]),
             }
 
-    def chat(self, mode, messages, task_type=None, params=None, request_body=None):
+    def chat(self, mode, messages, task_type=None, params=None, request_body=None, response_validator=None):
         errors = []
 
         context = self._log_context(mode, messages, params, False, task_type, request_body)
@@ -463,6 +466,7 @@ class AIRouter:
                 task_type,
                 lambda p, m: p.chat(m, messages, params=params),
                 context=context,
+                response_validator=response_validator,
             )
 
             if result:
@@ -473,7 +477,7 @@ class AIRouter:
 
         return {"success": False, "errors": errors}
 
-    def stream(self, mode, messages, task_type=None, params=None, request_body=None):
+    def stream(self, mode, messages, task_type=None, params=None, request_body=None, response_adapter=None):
         """实质内容到达前允许降级；完整消费成功后才记成功。
 
         元信息 success 表示已选中可输出的流，最终统计由返回的生成器完成。
@@ -563,7 +567,14 @@ class AIRouter:
                     # 由下方预启动并消费此内部哨兵，保证首次消费前 close()
                     # 也会执行 finally，及时归还已经打开的上游连接。
                     yield None
-                    yield from buffered
+                    def emit(chunk):
+                        if response_adapter is None:
+                            yield chunk
+                        else:
+                            for event in response_adapter.feed(self._parse_stream_chunk(chunk)):
+                                yield json.dumps(event, ensure_ascii=False)
+                    for chunk in buffered:
+                        yield from emit(chunk)
                     for chunk in iterator:
                         if not trace.data["attempts"]:
                             trace.data.setdefault("_fallback_stream", []).append("data: " + chunk + "\n")
@@ -574,7 +585,10 @@ class AIRouter:
                         usage = parsed.get("usage")
                         if isinstance(usage, dict) and type(usage.get("completion_tokens")) is int:
                             context["output_tokens"] = usage["completion_tokens"]
-                        yield chunk
+                        yield from emit(chunk)
+                    if response_adapter is not None:
+                        for event in response_adapter.finish():
+                            yield json.dumps(event, ensure_ascii=False)
                 except GeneratorExit:
                     self._log_attempt(target, context, "cancelled", start, code="client_closed")
                     raise

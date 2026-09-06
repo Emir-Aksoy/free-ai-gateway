@@ -117,6 +117,7 @@ PASSTHROUGH_PARAMS = (
     "seed",
     "tools",
     "tool_choice",
+    "parallel_tool_calls",
     "response_format",
     "n",
     "logprobs",
