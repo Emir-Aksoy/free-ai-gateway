@@ -4,6 +4,18 @@ English · [简体中文](README.md)
 
 A personal, self-hosted gateway for using your own model API accounts. The project currently focuses on aggregating **free API access** behind one OpenAI-compatible `/v1` endpoint. It does not provide public API keys or guarantee upstream availability or free pricing.
 
+## v1.2: Shared Providers and combined usage
+
+Run Mac and VPS instances at the same time. In the App Provider page, choose Sync to Mac or Sync to VPS, select Providers, preview changes and confirm. Both instances require v1.2; initialize the Mac instance and configure a working VPS SSH connection first. Selected configuration, free-model IDs, credentials and daily/RPM limits are copied, replacing matching target Providers. Routes, scores, logs and client keys remain independent.
+
+Credentials pass through the native SSH bridge and never enter the App web interface. There is no display, copy or export action. Temporary preview data is cleared on cancellation, use or expiry after five minutes. Destination credential files use private permissions. Device/server administrators can still read underlying files; this is not credential isolation from the device owner.
+
+Use Combine VPS + Mac in Overview to manually fetch the same UTC day and 60-second request window. Repeated clicks refresh a snapshot without writing counters back. Matching endpoint/key pairs are grouped; different keys remain separate, although they may share an upstream account allowance. Limits are never added together.
+
+The ledger counts actual generation POST attempts, including failures, retries, fallbacks and model tests. Metadata GET requests are excluded. Tokens include only usage reported by upstream. Pre-upgrade history, unavailable instances and recording gaps are explicitly incomplete. Built-in SQLite retains 31 days of daily aggregates and bounded recent records, with no database daemon.
+
+**This is a snapshot, not a shared rate limiter.** Concurrent instances may hit account-wide RPM or daily limits. Calls outside these gateways are invisible. Allocate limits between your instances and follow upstream policies.
+
 ## v1.1: Mac local mode and agents
 
 Choose Mac local or VPS in the App connection page. Initialize the local instance, save its one-time client key, start the gateway, then add your Providers and configure the `agent` or `code` route. Existing VPS settings and credentials remain separate and are never copied automatically.

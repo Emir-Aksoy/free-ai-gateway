@@ -507,6 +507,8 @@ def flush_all():
 
 
 def run():
+    from core.usage import enable_usage
+    enable_usage()
     server = Gateway((LISTEN_HOST, LISTEN_PORT), GatewayHandler)
     recovery = RecoveryWorker(router, logger)
 

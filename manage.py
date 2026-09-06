@@ -798,6 +798,13 @@ def cmd_status(params):
     }
 
     per_key_today, rpm_now = scan_access_log(LOG_DIR, day)
+    from core.usage import UsageLedger
+    attempt_usage = UsageLedger().snapshot(time.time())
+    rpm_exact = attempt_usage["available"] and attempt_usage["rpm_complete"]
+    if rpm_exact:
+        rpm_now = {}
+        for item in attempt_usage["rows"]:
+            rpm_now[item["provider"]] = rpm_now.get(item["provider"], 0) + item["rpm"]
 
     keys = APIKeyManager().list_keys()
 
@@ -818,6 +825,8 @@ def cmd_status(params):
             "calls": used.get("calls", 0),
             "tokens": used.get("tokens", 0),
             "rpm_now": rpm_now.get(provider, 0),
+            "rpm_approximate": not rpm_exact,
+            "rpm_source": "usage_ledger" if rpm_exact else "access_log_approximate",
             "rpm_limit": limit.get("rpm", 0),
             "daily_limit": limit.get("daily", 0),
         }
@@ -830,6 +839,24 @@ def cmd_status(params):
         "quota": quota,
         "generated_at": now_iso(),
     }
+
+
+def cmd_usage_snapshot(params):
+    """Private CLI/native snapshot; credential fingerprints never enter WebView."""
+    import math
+    from core.usage import UsageLedger
+    from core.registry import PROVIDERS
+    from tools.probe import current_key
+    at = params.get("at")
+    if set(params) != {"at"} or isinstance(at, bool) or not isinstance(at, (int, float)) or not math.isfinite(at):
+        raise ManageError("usage snapshot 需要 at Unix 时间戳", "invalid_input")
+    config = load_config()
+    apply_env_config(config)
+    configured = [(name, cls.base_url, current_key(name)) for name, cls in PROVIDERS.items()]
+    try:
+        return UsageLedger().snapshot(at, configured=configured, limits=config.get("quota") or {})
+    except (ValueError, OverflowError, OSError):
+        raise ManageError("usage snapshot 的 at 无效", "invalid_input") from None
 
 
 # ====================================================================
@@ -1596,11 +1623,26 @@ def cmd_providers_list(params):
                 "env_file": path,
                 "env_var": cls.env_var,
                 "configured": bool(key),
-                "masked": ("****" + key[-4:]) if key and len(key) >= 8 else ("****" if key else None),
+                "masked": None,
             }
         )
 
     return {"providers": out}
+
+
+def cmd_provider_sync_export(params):
+    from core.provider_sync import run
+    return run(sys.modules[__name__], "export", params)
+
+
+def cmd_provider_sync_preview(params):
+    from core.provider_sync import run
+    return run(sys.modules[__name__], "preview", params)
+
+
+def cmd_provider_sync_apply(params):
+    from core.provider_sync import run
+    return run(sys.modules[__name__], "apply", params)
 
 
 def cmd_providers_test(params):
@@ -2195,6 +2237,7 @@ def cmd_install_run(params):
 
 COMMANDS = {
     "status": cmd_status,
+    "usage snapshot": cmd_usage_snapshot,
     "models list": cmd_models_list,
     "models test": cmd_models_test,
     "models logs": cmd_models_logs,
@@ -2231,7 +2274,7 @@ def usage(error=None):
 @contextmanager
 def management_lock(cmd):
     # Serialize configuration writers across independent SSH management processes.
-    if cmd not in {"config set", "providers add", "providers set", "providers delete", "providers free-models"}:
+    if cmd not in {"config set", "providers add", "providers set", "providers delete", "providers free-models", "provider-sync export", "provider-sync preview", "provider-sync apply"}:
         yield
         return
     import fcntl
@@ -2259,6 +2302,25 @@ def main(argv):
         emit(usage(), 2)
 
     cmd = " ".join(words)
+    # Private native bridge: raw credentials may leave only successful export.
+    private_sync = {"provider-sync export": cmd_provider_sync_export,
+                    "provider-sync preview": cmd_provider_sync_preview,
+                    "provider-sync apply": cmd_provider_sync_apply}
+    if cmd in private_sync:
+        from core.provider_sync import SAFE_ERROR
+        try:
+            result = private_sync[cmd](read_params(cmd))
+            if cmd != "provider-sync export":
+                result = scrub_payload(result, provider_secrets())
+        except Exception as exc:
+            code = exc.code if isinstance(exc, ManageError) and exc.code in {
+                "invalid_input", "bad_config", "not_configured", "stale_preview",
+                "write_failed", "rollback_failed", "sync_failed", "busy"
+            } else "sync_failed"
+            emit(scrub_payload({"ok": False, "error": SAFE_ERROR, "code": code}), 1)
+            return
+        emit(dict({"ok": True}, **result), 0)
+        return
     handler = COMMANDS.get(cmd)
 
     if handler is None:
@@ -2293,4 +2355,6 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    from core.usage import enable_usage
+    enable_usage()
     main(sys.argv[1:])

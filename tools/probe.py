@@ -17,6 +17,7 @@ from core.registry import PROVIDERS, env_file_for, provider_definition
 from decimal import Decimal, InvalidOperation
 from providers.base import response_has_output
 from core.call_trace import CallTrace, begin_attempt, capture_response
+from core.usage import begin_generation, observe_response
 
 # 非对话模型一律跳过：语音、向量、审核、图像、视频、实时等
 NON_CHAT = re.compile(
@@ -280,12 +281,14 @@ def _test_model(name, model, key=None, timeout=TEST_TIMEOUT, max_tokens=256, pro
 
     start = time.time()
 
-    trace_attempt = begin_attempt(_url(cls, "/chat/completions"), payload, _headers(key), key)
+    endpoint, headers = _url(cls, "/chat/completions"), _headers(key)
+    trace_attempt = begin_attempt(endpoint, payload, headers, key)
+    usage_attempt = begin_generation(name, cls.base_url, key)
     try:
         response = requests.post(
-            _url(cls, "/chat/completions"),
+            endpoint,
             json=payload,
-            headers=_headers(key),
+            headers=headers,
             timeout=(min(CONNECT_TIMEOUT, timeout), timeout),
         )
     except requests.exceptions.Timeout as e:
@@ -304,6 +307,7 @@ def _test_model(name, model, key=None, timeout=TEST_TIMEOUT, max_tokens=256, pro
         return result
 
     try:
+        observe_response(usage_attempt, response)
         capture_response(trace_attempt, response)
         result["latency"] = round(time.time() - start, 2)
         result["status"] = response.status_code

@@ -16,6 +16,7 @@ import time
 import requests
 from requests.adapters import HTTPAdapter
 from core.call_trace import begin_attempt, capture_response, current_trace
+from core.usage import begin_generation, observe_response, observe_usage
 
 
 class ProviderError(Exception):
@@ -254,16 +255,21 @@ class BaseProvider:
         response = None
 
         for attempt in range(self.max_retries + 1):
-            trace_attempt = begin_attempt(self.endpoint(), payload, self.headers(), self.api_key)
+            endpoint, headers = self.endpoint(), self.headers()
+            trace_attempt = begin_attempt(endpoint, payload, headers, self.api_key)
+            usage_attempt = begin_generation(self.name, self.base_url, self.api_key)
             try:
                 response = self.session.post(
-                    self.endpoint(),
+                    endpoint,
                     json=payload,
-                    headers=self.headers(),
+                    headers=headers,
                     timeout=(self.connect_timeout, read_timeout),
                     stream=stream,
                 )
 
+                response._gateway_usage_attempt = usage_attempt
+                if not stream or response.status_code >= 400:
+                    observe_response(usage_attempt, response)
                 capture_response(trace_attempt, response, streaming=stream and response.status_code < 400)
                 self._raise_for_response(response)
                 return response
@@ -272,6 +278,8 @@ class BaseProvider:
                 last_error = e
 
                 if not e.retryable or attempt >= self.max_retries:
+                    if response is not None:
+                        response.close()
                     raise
 
                 retry_after = None
@@ -365,6 +373,7 @@ class BaseProvider:
                         parsed = json.loads(chunk)
                     except ValueError:
                         parsed = None
+                    observe_usage(getattr(response, "_gateway_usage_attempt", None), parsed)
                     choices = parsed.get("choices") if isinstance(parsed, dict) else None
                     if isinstance(choices, list):
                         for choice in choices:
