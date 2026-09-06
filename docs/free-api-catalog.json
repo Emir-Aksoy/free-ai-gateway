@@ -1,0 +1,124 @@
+{
+  "schema": 1,
+  "updated_at": "2026-09-06",
+  "providers": [
+    {
+      "id": "openrouter",
+      "title": "OpenRouter",
+      "base_url": "https://openrouter.ai/api/v1",
+      "env_var": "OPENROUTER_API_KEY",
+      "free_kind": "free_tier",
+      "models": [],
+      "summary": {
+        "zh-CN": "仅选择官方标为免费且当前可用的模型变体；一般以 :free 结尾。模型名单经常变化，请在扫描页查询，不把所有模型当免费。",
+        "en": "Choose currently available free variants, typically ending in :free. Discover current IDs in Scan; not every model is free."
+      },
+      "limits": {
+        "zh-CN": "免费请求有平台与上游限制；账号余额/购买历史可能影响可用额度，以当前账号页面为准。",
+        "en": "Platform and upstream limits apply. Account balance and purchase history may affect access; check your account."
+      },
+      "sources": [
+        {
+          "title": "Free variants",
+          "url": "https://openrouter.ai/docs/guides/routing/model-variants/free"
+        },
+        {
+          "title": "Limits",
+          "url": "https://openrouter.ai/docs/api_reference/limits"
+        },
+        {
+          "title": "Quickstart",
+          "url": "https://openrouter.ai/docs/quickstart"
+        }
+      ],
+      "checked_at": "2026-09-06"
+    },
+    {
+      "id": "groq",
+      "title": "Groq",
+      "base_url": "https://api.groq.com/openai/v1",
+      "env_var": "GROQ_API_KEY",
+      "free_kind": "free_tier",
+      "models": [
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b"
+      ],
+      "summary": {
+        "zh-CN": "官方提供 Free Plan。示例模型来自免费限额表，接入前仍需查询当前目录及账号权限。",
+        "en": "The official Free Plan lists these example models. Recheck the live catalog and account access before use."
+      },
+      "limits": {
+        "zh-CN": "按组织和模型限制 RPM、RPD、TPM 等，任一维度先用尽都会限流。账号控制台为准。",
+        "en": "Organization/model RPM, RPD and token limits all apply. The first exhausted limit blocks requests; check your console."
+      },
+      "sources": [
+        {
+          "title": "Free plan limits",
+          "url": "https://console.groq.com/docs/rate-limits"
+        },
+        {
+          "title": "OpenAI compatibility",
+          "url": "https://console.groq.com/docs/openai"
+        }
+      ],
+      "checked_at": "2026-09-06"
+    },
+    {
+      "id": "gemini",
+      "title": "Google Gemini",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "env_var": "GEMINI_API_KEY",
+      "free_kind": "free_tier",
+      "models": [
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite"
+      ],
+      "summary": {
+        "zh-CN": "仅部分模型提供免费层；示例来自官方定价表。付费层、音视频/图片模型与附加工具可能采用不同定价。",
+        "en": "Only selected models offer a free tier. Examples come from official pricing; paid tiers, media models and extra tools differ."
+      },
+      "limits": {
+        "zh-CN": "额度、地区和账号资格以 AI Studio 为准。免费层数据使用政策与付费层可能不同。",
+        "en": "Limits, regions and eligibility depend on AI Studio. Free-tier data-use policies may differ from paid tiers."
+      },
+      "sources": [
+        {
+          "title": "Pricing",
+          "url": "https://ai.google.dev/gemini-api/docs/pricing"
+        },
+        {
+          "title": "OpenAI compatibility",
+          "url": "https://ai.google.dev/gemini-api/docs/openai"
+        }
+      ],
+      "checked_at": "2026-09-06"
+    },
+    {
+      "id": "cerebras",
+      "title": "Cerebras",
+      "base_url": "https://api.cerebras.ai/v1",
+      "env_var": "CEREBRAS_API_KEY",
+      "free_kind": "trial",
+      "models": [],
+      "summary": {
+        "zh-CN": "限时试用，不是持续免费 API。官方当前说明：验证付款方式后赠送5美元，30天到期。不要把试用模型登记为永久免费。",
+        "en": "A limited trial, not a recurring free API. Current docs describe $5 after payment-method verification, expiring after 30 days."
+      },
+      "limits": {
+        "zh-CN": "需要验证付款方式；额度用完或到期后需要购买额度。此项作为免费政策变化提醒保留。",
+        "en": "A verified payment method is required. After credit expiry/exhaustion, purchased credits are needed. Kept as a policy-change notice."
+      },
+      "sources": [
+        {
+          "title": "Trial and rate limits",
+          "url": "https://inference-docs.cerebras.ai/support/rate-limits"
+        },
+        {
+          "title": "OpenAI compatibility",
+          "url": "https://inference-docs.cerebras.ai/resources/openai"
+        }
+      ],
+      "checked_at": "2026-09-06"
+    }
+  ]
+}

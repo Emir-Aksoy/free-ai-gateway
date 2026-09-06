@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-04",
+  "generated_at": "2026-09-06",
   "gateway_modes": [
     "agent",
     "balanced",
@@ -10,7 +10,7 @@
     "writing"
   ],
   "weights": {
-    "说明": "capability × 0.7 + 成功率 × 0.2 + 速度 × 0.1；样本不足 10 次的模型，成功率与速度都按满分算，所以新模型容易插队",
+    "说明": "当前评分使用近期任务样本的平滑成功率，速度按有效首字等待时间；缺样本采用中性速度分。免费政策与接入信息见free-api-catalog.json。",
     "fast": "agent .35 / thinking .35 / coding .30",
     "balanced": "agent .35 / thinking .35 / coding .30",
     "thinking": "thinking .7 / agent .2 / coding .1",

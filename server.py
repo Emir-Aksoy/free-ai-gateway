@@ -205,7 +205,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def _route_post(self):
         # One handler can serve multiple requests on a keep-alive connection.
-        for field in ("_responses_custom", "_responses_model"):
+        for field in ("_responses_custom", "_responses_model", "_configured_order"):
             if hasattr(self, field): delattr(self, field)
         path = self.path.split("?", 1)[0]
 
@@ -244,6 +244,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
         mode = body.get("model") or "fast"
         task_type = body.get("task_type")
+        if "gateway_route_order" in body:
+            if (path != "/v1/chat/completions" or mode != "thinking" or body.get("stream")
+                    or body["gateway_route_order"] != "configured"):
+                self._error("gateway_route_order 仅支持thinking非流式configured请求", 400, "invalid_route_order")
+                return
+            self._configured_order = True
 
         # 直接把 code/writing/agent 当 model 传进来时，补上 task_type，
         # 让 capability 打分用对应的权重
@@ -253,7 +259,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         params = {
             key: value
             for key, value in body.items()
-            if key not in ("model", "messages", "stream", "task_type")
+            if key not in ("model", "messages", "stream", "task_type", "gateway_route_order")
         }
 
         if body.get("stream"):
@@ -263,6 +269,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def _handle_chat(self, api_key, mode, messages, task_type, params, request_body=None):
         options = {}
+        if getattr(self, "_configured_order", False):
+            options["preserve_order"] = True
+            def require_text(payload):
+                try:
+                    text = payload["choices"][0]["message"].get("content")
+                except (TypeError, KeyError, IndexError, AttributeError):
+                    text = None
+                if not isinstance(text, str) or not text.strip():
+                    raise ValueError("助手需要非空文字回答")
+            options["response_validator"] = require_text
         if hasattr(self, "_responses_custom"):
             from core.responses import from_chat
             options["response_validator"] = lambda payload: from_chat(payload, self._responses_model, self._responses_custom)
@@ -315,6 +331,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
             }
         )
 
+        if getattr(self, "_configured_order", False):
+            from core.assistant import safe_errors
+            payload = dict(payload, _gateway={"target": result.get("target"),
+                                             "errors": safe_errors(result.get("errors"))})
         self._json(payload)
 
     def _handle_stream(self, api_key, mode, messages, task_type, params, request_body=None):

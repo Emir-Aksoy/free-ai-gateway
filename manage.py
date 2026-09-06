@@ -470,16 +470,40 @@ def scrub_payload(obj, secrets=(), keep=()):
     return obj
 
 
-def provider_secrets():
+def provider_secrets(strict=False):
     """当前已配置的各家密钥值，只用于脱敏比对，绝不输出。"""
 
     try:
-        from core.registry import PROVIDERS
+        from core.registry import PROVIDERS, env_file_for
         from tools import probe
 
         apply_env_config()
+        if strict:
+            secrets = []
+            for name, cls in PROVIDERS.items():
+                path = env_file_for(name)
+                if not path:
+                    continue
+                try:
+                    with open(path, 'r') as stream:
+                        contents = stream.read(1024 * 1024 + 1)
+                except FileNotFoundError:
+                    if os.path.lexists(path):
+                        raise
+                    continue
+                if len(contents) > 1024 * 1024:
+                    raise ValueError('Provider credential file is too large')
+                for line in contents.splitlines():
+                    line = line.strip()
+                    if line.startswith(cls.env_var + '='):
+                        key = line.split('=', 1)[1].strip().strip("'\"")
+                        if key:
+                            secrets.append(key)
+            return secrets
         return [k for k in (probe.current_key(name) for name in PROVIDERS) if k]
     except Exception:
+        if strict:
+            raise
         return []
 
 
@@ -2235,7 +2259,26 @@ def cmd_install_run(params):
 # 入口
 # ====================================================================
 
+def cmd_assistant_ask(params):
+    from core.apikey import APIKeyManager
+    from core.assistant import AssistantError, ask, validate_params
+    try:
+        params = validate_params(params)
+        service = service_name()
+        if not service_is_active(service):
+            raise AssistantError('请先启动当前实例的网关，再使用助手', 'assistant_not_running')
+        manager = APIKeyManager()
+        return ask(params, port=gateway_port(service), client_keys=dict(manager.data['keys']),
+                   secrets=provider_secrets(strict=True))
+    except AssistantError as error:
+        raise ManageError(str(error), error.code) from None
+    except Exception:
+        # Neither connection details nor key-store diagnostics may enter assistant replies.
+        raise ManageError('助手暂不可用，请检查实例配置后重试', 'assistant_unavailable') from None
+
+
 COMMANDS = {
+    "assistant ask": cmd_assistant_ask,
     "status": cmd_status,
     "usage snapshot": cmd_usage_snapshot,
     "models list": cmd_models_list,

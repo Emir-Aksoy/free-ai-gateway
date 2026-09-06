@@ -2,7 +2,19 @@
 
 English · [简体中文](README.md)
 
-A personal, self-hosted gateway for using your own model API accounts. The project currently focuses on aggregating **free API access** behind one OpenAI-compatible `/v1` endpoint. It does not provide public API keys or guarantee upstream availability or free pricing.
+A **lightweight, easy-to-use personal API manager** for your Mac or VPS, using your own model API accounts. The project currently focuses on aggregating **free API access** behind one OpenAI-compatible `/v1` endpoint. It does not provide public API keys or guarantee upstream availability or free pricing.
+
+[Free API catalog](docs/free-api-catalog.en.md) · [Project comparison](docs/comparison.md) · [Download App](https://github.com/Emir-Aksoy/free-ai-gateway/releases/latest)
+
+## v1.3: Small setup assistant
+
+The assistant provides Provider/model discovery and text setup guidance only. For every question, the App reads this project's GitHub catalog, selects relevant entries and supplies its built-in product manual to the first available model in the current instance's configured thinking order. Failures fall back in that order; ordinary client routing is unchanged. The UI shows the actual model, duration and fallback summaries.
+
+Models do not need tool-calling support to use this fixed retrieval flow. The manual covers Mac/VPS setup, Providers, model discovery/testing, routes/scores, client keys, logs, sync/usage and Agent integration. Browse the catalog/manual without a model. To ask questions, configure a Provider and thinking route, start the gateway and keep an enabled client key. Update both App and VPS to v1.3.
+
+No automatic configuration, commands, credential requests, web crawler or resident search process. Perform changes in existing forms. If GitHub is unavailable, a dated bundled snapshot is clearly marked. Conversations stay on the current page, with bounded history and output. Inference counts toward gateway usage; stopping the wait does not guarantee cancellation of an upstream request already sent.
+
+The catalog separates recurring free tiers, trials and unverified claims, with official sources and check dates. Trial credits are not always-free access. Confirm account eligibility and test before routing traffic. See the catalog for maintenance instructions.
 
 ## v1.2: Shared Providers and combined usage
 

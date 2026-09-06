@@ -7,6 +7,7 @@
 """
 
 import json
+import copy
 import sqlite3
 import os
 import threading
@@ -221,8 +222,10 @@ class AIRouter:
             return self._legacy_rank_routes(routes, task_type)
         return self.explain_routes(routes, task_type)["order"]
 
-    def explain_routes(self, routes, task_type):
+    def explain_routes(self, routes, task_type, preserve_order=False):
         policy = effective_policy(self.routing, task_type)
+        if preserve_order:
+            policy = dict(policy, mode="manual")
         now = time.time()
         with self.lock:
             cooldowns = dict(self.cooldowns)
@@ -258,11 +261,20 @@ class AIRouter:
         return {"task": task_type, "policy": policy, "candidates": candidates, "order": order,
                 "window_hours": 24, "sample_limit": 100}
 
-    def _prepare_routes(self, mode, task_type, context):
-        configured = self.get_routes(mode, task_type)
+    def _prepare_routes(self, mode, task_type, context, preserve_order=False):
+        if preserve_order:
+            configured = self.modes.get('thinking', []) if mode == 'thinking' else []
+            if not isinstance(configured, list):
+                configured = []
+        else:
+            configured = self.get_routes(mode, task_type)
         if not hasattr(self, "metrics"):
+            if preserve_order:
+                with self.lock:
+                    cooldowns = dict(self.cooldowns)
+                return [target for target in configured if cooldowns.get(target, 0) <= time.time()]
             return self.rank_routes(configured, task_type or mode)
-        decision = self.explain_routes(configured, task_type or mode)
+        decision = self.explain_routes(configured, task_type or mode, preserve_order=preserve_order)
         context["decision"] = decision
         for row in decision["candidates"]:
             if row["target"] not in decision["order"]:
@@ -454,17 +466,32 @@ class AIRouter:
                 "error": "%s: %s" % (type(e).__name__, str(e)[:200]),
             }
 
-    def chat(self, mode, messages, task_type=None, params=None, request_body=None, response_validator=None):
+    def chat(self, mode, messages, task_type=None, params=None, request_body=None, response_validator=None, preserve_order=False):
         errors = []
+        deadline = time.monotonic() + 100 if preserve_order else None
+
+        def call(provider, model):
+            if not preserve_order:
+                return provider.chat(model, messages, params=params)
+            # Registry instances are shared with business traffic. Only this shallow
+            # copy gets a shorter budget; sessions, tracing and usage stay shared.
+            provider = copy.copy(provider)
+            provider.max_retries = 0
+            provider.connect_timeout = 3
+            return provider.chat(model, messages, params=params,
+                                 timeout=max(1, min(25, deadline - time.monotonic())))
 
         context = self._log_context(mode, messages, params, False, task_type, request_body)
-        routes = self._prepare_routes(mode, task_type, context)
+        routes = self._prepare_routes(mode, task_type, context, preserve_order=preserve_order)
         for index, target in enumerate(routes):
+            if deadline is not None and time.monotonic() >= deadline:
+                errors.append({"reason": "request_budget"})
+                break
             context["next_target"] = routes[index + 1] if index + 1 < len(routes) else None
             result, error = self._attempt(
                 target,
                 task_type,
-                lambda p, m: p.chat(m, messages, params=params),
+                call,
                 context=context,
                 response_validator=response_validator,
             )
