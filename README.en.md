@@ -8,7 +8,7 @@ A personal, self-hosted gateway for using your own model API accounts. The proje
 
 Choose Mac local or VPS in the App connection page. Initialize the local instance, save its one-time client key, start the gateway, then add your Providers and configure the `agent` or `code` route. Existing VPS settings and credentials remain separate and are never copied automatically.
 
-The App includes the runtime: no separate Python, Docker, database daemon or local model inference. The default endpoint is `http://127.0.0.1:8090/v1`, restricted to loopback. A started gateway continues after quitting the App; stop it explicitly in the App. It does not start automatically after login. Local mode allows 8 HTTP connections and closes idle connections after 30 seconds. The Mac runtime adds no VPS dependencies.
+The App includes the runtime: no separate Python, Docker, database daemon or local model inference. The default endpoint is `http://127.0.0.1:18473/v1`, restricted to loopback. A started gateway continues after quitting the App; stop it explicitly in the App. It does not start automatically after login. Local mode allows 8 HTTP connections and closes idle connections after 30 seconds. The Mac runtime adds no VPS dependencies.
 
 OpenClaw custom Providers use `api: "openai-completions"`. Codex custom Providers use `wire_api = "responses"`, the same `/v1` base URL, an environment variable containing your gateway key, and `supports_websockets = false`. Select a task alias such as `agent`; disable hosted web search.
 

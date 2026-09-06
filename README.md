@@ -8,7 +8,7 @@
 
 App 可在「连接」中切换 Mac 本机 / VPS。首次使用本机模式，初始化并保存首次显示的客户端密钥，启动网关，再添加 Provider、测试模型并配置 `agent` 或 `code` 调用链。原有 VPS 连接、配置和密钥独立保留，不会自动复制到本机。
 
-本机组件随 App 提供，不需要另装 Python、Docker 或数据库服务。它只转发 API，不在 Mac 上加载模型；默认地址为 `http://127.0.0.1:8090/v1`，仅限本机访问。启动后可退出 App；在 App 中点击停止会关闭网关。重启或重新登录后需再次手动启动。默认最多 8 个 HTTP 连接，空闲连接 30 秒关闭，日志沿用有上限的本地存储。VPS 不安装 Mac 运行组件，也不新增依赖。
+本机组件随 App 提供，不需要另装 Python、Docker 或数据库服务。它只转发 API，不在 Mac 上加载模型；默认地址为 `http://127.0.0.1:18473/v1`，仅限本机访问。启动后可退出 App；在 App 中点击停止会关闭网关。重启或重新登录后需再次手动启动。默认最多 8 个 HTTP 连接，空闲连接 30 秒关闭，日志沿用有上限的本地存储。VPS 不安装 Mac 运行组件，也不新增依赖。
 
 - **OpenClaw**：自定义 Provider 使用 `api: "openai-completions"`，Base URL 填本机地址，model 选择网关任务别名 `agent`。支持流式回复及客户端工具的多轮调用。
 - **Codex**：自定义 Provider 使用 `wire_api = "responses"`，通过 `/v1/responses` 接入。支持完整历史、指令、普通函数工具、命名空间工具、文本自定义工具、SSE 和用量统计。工具实际执行仍由 Codex 负责。
@@ -25,7 +25,7 @@ web_search = "disabled"
 
 [model_providers.personal_gateway]
 name = "Personal Gateway"
-base_url = "http://127.0.0.1:8090/v1"
+base_url = "http://127.0.0.1:18473/v1"
 env_key = "PERSONAL_GATEWAY_KEY"
 wire_api = "responses"
 supports_websockets = false
