@@ -57,9 +57,60 @@ def _has_function_call(value, streaming):
     return _has_text(value.get("name")) or (streaming and _has_text(value.get("arguments")))
 
 
+ERROR_PLACEHOLDER = 'assistant reply unavailable due to model error.'
+PLACEHOLDER_VARIANTS = (ERROR_PLACEHOLDER, '[' + ERROR_PLACEHOLDER + ']')
+
+
+def content_text(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return ''.join(part.get('text', '') for part in value
+                       if isinstance(part, dict) and isinstance(part.get('text'), str))
+    return ''
+
+
+def normalized_text(value):
+    return ' '.join(content_text(value).split()).casefold()
+
+
+def message_has_tool(message, streaming=False):
+    calls = message.get('tool_calls')
+    return (_has_function_call(message.get('function_call'), streaming) or
+            (isinstance(calls, list) and any(
+                isinstance(call, dict) and _has_function_call(call.get('function'), streaming)
+                for call in calls)))
+
+
+def response_error_code(payload, streaming=False):
+    if not isinstance(payload, dict) or not isinstance(payload.get('choices'), list):
+        return None
+    for choice in payload['choices']:
+        if not isinstance(choice, dict):
+            continue
+        if choice.get('finish_reason') == 'error' or choice.get('error'):
+            return 'model_error'
+        message = choice.get('message')
+        if (not streaming and isinstance(message, dict) and not message_has_tool(message)
+                and normalized_text(message.get('content')) in PLACEHOLDER_VARIANTS):
+            return 'error_placeholder'
+    return None
+
+
+def validate_model_response(payload, streaming=False, include_tokens=True):
+    code = response_error_code(payload, streaming)
+    if code:
+        message = ('上游只返回了模型错误占位文本' if code == 'error_placeholder'
+                   else '上游通过结束标记报告模型错误')
+        raise ProviderError(message, retryable=True, code=code,
+                            tokens=usage_tokens(payload) if include_tokens else 0)
+
+
 def response_has_output(payload, streaming=False):
     """只有最终文本或工具调用才是有效输出，reasoning/role/usage 不算。"""
     if not isinstance(payload, dict) or payload.get("error"):
+        return False
+    if response_error_code(payload, streaming):
         return False
     choices = payload.get("choices")
     if not isinstance(choices, list):
@@ -317,6 +368,7 @@ class BaseProvider:
 
         try:
             result = response.json()
+            validate_model_response(result)
             if not response_has_output(result):
                 raise ProviderError(
                     "%s: 响应没有有效内容" % self.name,

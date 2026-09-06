@@ -20,6 +20,8 @@ REASONS = {
     'rate_limited': '服务商限流或余额不足，等待额度恢复',
     'request_incompatible': '当前请求或模型不兼容，不计入模型可靠性',
     'cooldown': '模型正在冷却，暂时跳过',
+    'error_placeholder': '上游只返回了模型错误占位文本，已判定失败',
+    'model_error': '上游通过结束标记报告模型错误，已判定失败',
     'empty_response': '上游没有返回有效正文或工具调用',
     'invalid_json': '上游返回的内容不是合法 JSON',
     'stream_incomplete': '流式响应在正常结束标记前中断',

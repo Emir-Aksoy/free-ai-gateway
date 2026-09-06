@@ -25,7 +25,8 @@ from core.quota import QuotaManager
 from core.capability import CapabilityManager
 from core.routing_metrics import RoutingMetrics
 from router.policy import effective_policy, failure_category
-from providers.base import ProviderError, response_has_output, usage_tokens
+from providers.base import (ProviderError, response_has_output, usage_tokens, validate_model_response,
+                            content_text, normalized_text, message_has_tool, PLACEHOLDER_VARIANTS)
 
 # 冷却梯度：首次失败短冷却给个机会，连续失败才拉长。
 COOLDOWN_STEPS = (300, 900, 1800)
@@ -423,6 +424,7 @@ class AIRouter:
             tokens = usage_tokens(result)
             if tokens:
                 self.quota.record_tokens_only(provider_name, tokens)
+            validate_model_response(result, include_tokens=False)
             if not response_has_output(result):
                 raise ProviderError("%s: 响应没有有效内容" % target, retryable=True, code="empty_response")
 
@@ -544,7 +546,7 @@ class AIRouter:
             tokens = 0
             try:
                 provider = get_provider(provider_name)
-                iterator = trace.wrap(iter(provider.stream(model, messages, params=params)))
+                iterator = self._guard_stream_prefix(trace.wrap(iter(provider.stream(model, messages, params=params))))
                 for chunk in iterator:
                     if not trace.data["attempts"]:
                         trace.data.setdefault("_fallback_stream", []).append("data: " + chunk + "\n")
@@ -566,6 +568,7 @@ class AIRouter:
 
             except Exception as error:
                 self._close_stream(iterator)
+                tokens = max(tokens, getattr(error, "tokens", 0))
                 if tokens:
                     self.quota.record_tokens_only(provider_name, tokens)
                 self._record_failure(target, context, start, error)
@@ -620,6 +623,7 @@ class AIRouter:
                     self._log_attempt(target, context, "cancelled", start, code="client_closed")
                     raise
                 except Exception as error:
+                    tokens = max(tokens, getattr(error, "tokens", 0))
                     self._record_failure(target, context, start, error)
                     self._log_attempt(target, context, "failed", start, error=error)
                     raise
@@ -639,6 +643,59 @@ class AIRouter:
 
         return {"success": False, "errors": errors}, None
 
+    def _guard_stream_prefix(self, iterator):
+        """Hold only a possible reserved placeholder until it diverges or ends.
+
+        Ordinary text/tools remain streaming. Once genuine output is released,
+        later failures must be surfaced, never spliced with a fallback model.
+        """
+        buffered, texts = [], {}
+        tokens = 0
+        def reject_placeholder():
+            if any(normalized_text(text) in PLACEHOLDER_VARIANTS for text in texts.values()):
+                raise ProviderError('上游只返回了模型错误占位文本', retryable=True,
+                                    code='error_placeholder', tokens=tokens)
+        try:
+            for chunk in iterator:
+                if chunk == '[DONE]':
+                    reject_placeholder()
+                    yield from buffered
+                    yield chunk
+                    return
+                parsed = self._parse_stream_chunk(chunk)
+                tokens = max(tokens, usage_tokens(parsed))
+                choices = parsed.get('choices', [])
+                has_tool = False
+                for choice in choices if isinstance(choices, list) else []:
+                    if not isinstance(choice, dict): continue
+                    delta = choice.get('delta') or {}
+                    if not isinstance(delta, dict): continue
+                    index = choice.get('index', 0)
+                    if not isinstance(index, int): index = 0
+                    text = content_text(delta.get('content'))
+                    if text: texts[index] = texts.get(index, '') + text
+                    has_tool = has_tool or message_has_tool(delta, streaming=True)
+                if not texts and not has_tool:
+                    yield chunk
+                    continue
+                buffered.append(chunk)
+                possible = all(any(value.startswith(normalized_text(text)) for value in PLACEHOLDER_VARIANTS)
+                               for text in texts.values())
+                if has_tool or not possible:
+                    yield from buffered
+                    yield from iterator
+                    return
+                if len(buffered) > 64 or sum(len(value) for value in buffered) > 65536:
+                    raise ProviderError('上游错误占位前缀超过检查上限', retryable=True,
+                                        code='invalid_response', tokens=tokens)
+            reject_placeholder()
+            yield from buffered
+        except ProviderError as error:
+            error.tokens = max(error.tokens, tokens)
+            raise
+        finally:
+            self._close_stream(iterator)
+
     @staticmethod
     def _parse_stream_chunk(chunk):
         try:
@@ -649,6 +706,7 @@ class AIRouter:
             error = parsed.get("error") if isinstance(parsed, dict) else None
             status = error.get("code") if isinstance(error, dict) else None
             raise ProviderError("上游返回流式错误", status=status if type(status) is int and 400 <= status <= 599 else None, retryable=True, code="stream_error")
+        validate_model_response(parsed, streaming=True)
         return parsed
 
     @staticmethod
